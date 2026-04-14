@@ -1,0 +1,849 @@
+---
+title: "Stat Analysis"
+author: "CPJ"
+date: "2026-04-10"
+output: html_document
+---
+This script will produce the statistic analysis for the manuscript "Peatlands Control Aquatic Carbon Pools and Fluxes in an Arctic Subcatchment".
+```{r setup, include=FALSE}
+####Load in Libraries####
+library(dplyr)
+library(lubridate)
+library(colorblindcheck)
+library(ggpubr)
+library(rstatix)
+library(readr)
+library(patchwork)
+library(tools)
+library(tidyr)
+library(randomForest)
+library(caret)
+library(ComplexUpset)
+library(ggrepel)
+library(pairwiseAdonis)
+library(flextable)
+library(officer)
+library(effectsize)
+
+####Import Data Frames####
+avg_site_all <- read_csv("avg_site_all.csv")
+#ft_site_all <- read_csv("ft_site_all.csv")
+avg_site_surf <- read_csv("avg_site_surf.csv")
+```
+
+# Group Comparisons
+
+## General Chemistry
+```{r Anovas and Kruskal Wallace-Chemistry}
+df.ft.mean.filtered <- avg_site_surf %>%
+  filter(!Plot %in% c(1, 2)) #filter tundra lakes because theres not that many of them
+
+df.ft.mean.filtered <- df.ft.mean.filtered %>%
+  mutate(Aquatic_Type_pair = paste(Aquatic_Type, Landcover, sep = "_"))
+
+# ---------------------------
+# 1️⃣ Global test function
+# ---------------------------
+
+run_test <- function(data, var, normal = FALSE) {
+
+  df <- data %>%
+    select(Aquatic_Type_pair, all_of(var)) %>%
+    filter(
+      !is.na(Aquatic_Type_pair),
+      !is.na(.data[[var]])
+    )
+
+  formula <- as.formula(paste(var, "~ Aquatic_Type_pair"))
+
+  if (normal) {
+
+    res <- df %>% anova_test(formula)
+
+    tibble(
+      Variable = var,
+      Test = "ANOVA",
+      Stat_name = "F",
+      Statistic = res$F,
+      DF1 = res$DFn,
+      DF2 = res$DFd,
+      p_value = res$p
+    )
+
+  } else {
+
+    res <- df %>% kruskal_test(formula)
+
+    tibble(
+      Variable = var,
+      Test = "Kruskal-Wallis",
+      Stat_name = "Chi_sq",
+      Statistic = res$statistic,
+      DF1 = res$df,
+      DF2 = NA,
+      p_value = res$p
+    )
+  }
+}
+
+
+# ---------------------------
+# 2️⃣ GLOBAL TABLES
+# ---------------------------
+
+global_flux <- bind_rows(
+  run_test(df.ft.mean.filtered, "DOC_mgL", FALSE),
+  run_test(df.ft.mean.filtered, "TDN_mgL", FALSE),
+  run_test(df.ft.mean.filtered, "CN", TRUE),
+  run_test(df.ft.mean.filtered, "CO2Flux_gm2d", FALSE),
+  run_test(df.ft.mean.filtered, "pCO2_uatm", FALSE)
+) %>%
+  mutate(across(where(is.numeric), ~ signif(.x, 3)))
+
+
+global_ft <- bind_rows(
+  run_test(df.ft.mean.filtered, "Raos_Elemental_Comp", TRUE),
+  run_test(df.ft.mean.filtered, "Shannon_Diversity", TRUE),
+  run_test(df.ft.mean.filtered, "NOSC_mean", TRUE),
+  run_test(df.ft.mean.filtered, "Amino_sugar", TRUE),
+  run_test(df.ft.mean.filtered, "Carbohydrate", TRUE),
+  run_test(df.ft.mean.filtered, "Cond_HC", TRUE),
+  run_test(df.ft.mean.filtered, "Lignin", TRUE),
+  run_test(df.ft.mean.filtered, "Lipid", TRUE),
+  run_test(df.ft.mean.filtered, "Protein", TRUE),
+  run_test(df.ft.mean.filtered, "Tannin", TRUE),
+  run_test(df.ft.mean.filtered, "Unsat_HC", TRUE)
+) %>%
+  mutate(across(where(is.numeric), ~ signif(.x, 3)))
+
+
+global_table <- bind_rows(global_flux, global_ft) %>%
+  mutate(
+    Variable = recode(Variable,
+      "DOC_mgL" = "DOC",
+      "TDN_mgL" = "TDN",
+      "CN" = "C:N",
+      "CO2Flux_gm2d" = "CO2 flux (g m-2 d-1)",
+      "pCO2_uatm" = "pCO2 (µatm)",
+      "Shannon_Diversity" = "Shannon Diversity",
+      "Raos_Elemental_Comp" = "Elemental Composition",
+      "NOSC_mean" = "Average NOSC",
+      "Amino_sugar" = "Amino Sugar",
+      "Cond_HC" = "Condensed HC",
+      "Unsat_HC" = "Unsaturated HC"
+    )
+  )
+
+
+table_S1 <- global_table %>%
+  mutate(
+    DF = ifelse(Test == "ANOVA",
+                paste0("(", DF1, ", ", DF2, ")"),
+                paste0("(", DF1, ")"))
+  ) %>%
+  rename(
+    Statistic = Stat_name,
+    Value = Statistic,
+    p = p_value
+  ) %>%
+  select(Variable, Test, Statistic, DF, Value, p)
+
+
+ft_S1 <- flextable(table_S1) %>%
+  bold(i = ~ p < 0.05, j = "p", bold = TRUE) %>%
+  colformat_num(j = c("Value", "p"), digits = 3) %>%
+  set_header_labels(
+    Variable = "Response Variable",
+    Test = "Test",
+    Statistic = "Statistic",
+    Value = "Value",
+    DF = "DF",
+    p = "p-value"
+  ) %>%
+  autofit()
+
+
+# ---------------------------
+# 3️⃣ POSTHOC FUNCTION
+# ---------------------------
+
+run_posthoc <- function(data, var, normal = FALSE) {
+
+  df <- data %>%
+    select(Aquatic_Type_pair, all_of(var)) %>%
+    filter(
+      !is.na(Aquatic_Type_pair),
+      !is.na(.data[[var]])
+    )
+
+  formula <- as.formula(paste(var, "~ Aquatic_Type_pair"))
+
+  if (normal) {
+    res <- df %>% tukey_hsd(formula) %>%
+      mutate(Test_posthoc = "Tukey")
+  } else {
+    res <- df %>% pairwise_wilcox_test(formula, p.adjust.method = "BH") %>%
+      mutate(Test_posthoc = "Pairwise Wilcox")
+  }
+
+  res %>%
+    select(group1, group2, p.adj, Test_posthoc) %>%
+    mutate(
+      Variable = var,
+      p.adj = signif(p.adj, 3)
+    )
+}
+
+
+# ---------------------------
+# 4️⃣ VARIABLE MAPS
+# ---------------------------
+
+var_map_flux <- c(
+  "DOC" = "DOC_mgL",
+  "TDN" = "TDN_mgL",
+  "C:N" = "CN",
+  "CO2 flux (g m-2 d-1)" = "CO2Flux_gm2d",
+  "pCO2 (µatm)" = "pCO2_uatm"
+)
+
+var_map_ft <- c(
+  "Elemental Composition" = "Raos_Elemental_Comp",
+  "Shannon Diversity" = "Shannon_Diversity",
+  "Average NOSC" = "NOSC_mean",
+  "Amino Sugar" = "Amino_sugar",
+  "Carbohydrate" = "Carbohydrate",
+  "Condensed HC" = "Cond_HC",
+  "Lignin" = "Lignin",
+  "Lipid" = "Lipid",
+  "Protein" = "Protein",
+  "Tannin" = "Tannin",
+  "Unsaturated HC" = "Unsat_HC"
+)
+
+
+# ---------------------------
+# 5️⃣ POSTHOC RUNS
+# ---------------------------
+
+sig_vars_flux <- global_table %>%
+  filter(p_value < 0.05 & Variable %in% names(var_map_flux)) %>%
+  pull(Variable)
+
+posthoc_flux <- map(
+  sig_vars_flux,
+  ~ run_posthoc(df.ft.mean.filtered, unname(var_map_flux[.x]), normal = .x == "C:N")
+) %>%
+  bind_rows()
+
+
+sig_vars_ft <- global_table %>%
+  filter(p_value < 0.05 & Variable %in% names(var_map_ft)) %>%
+  pull(Variable)
+
+posthoc_ft <- map(
+  sig_vars_ft,
+  ~ run_posthoc(df.ft.mean.filtered, unname(var_map_ft[.x]), normal = TRUE)
+) %>%
+  bind_rows()
+
+
+# ---------------------------
+# 6️⃣ TABLE OUTPUT
+# ---------------------------
+
+posthoc_table <- bind_rows(posthoc_flux, posthoc_ft)
+
+ft_posthoc <- flextable(posthoc_table) %>%
+  bold(i = ~ p.adj < 0.05, j = "p.adj", bold = TRUE) %>%
+  autofit()
+ft_posthoc
+
+# ---------------------------
+# 7️⃣ EXPORT DOCX
+# ---------------------------
+
+doc <- read_docx()
+
+doc <- doc %>%
+  body_add_par("Table S1: Global Test Results", style = "heading 1") %>%
+  body_add_flextable(ft_S1) %>%
+  body_add_par("", style = "Normal")
+
+doc <- doc %>%
+  body_add_par("Table S2: Post Hoc Test Results", style = "heading 1") %>%
+  body_add_flextable(ft_posthoc)
+
+#print(doc, target = "SupplementaryStats_Tables.docx")
+```
+
+## NOSC and Mass
+### NOSC
+####Data
+```{r NOSC Data}
+df_nosc <- ft_site_all %>%
+  mutate(
+    Compound_Group = case_when(
+      Universal ~ "Universal",
+      !Universal & !Partial ~ "Unique",
+      TRUE ~ "Shared"
+    )
+  ) %>%
+  filter(Compound_Group %in% c("Universal", "Unique"))
+
+df_nosc$Aquatic_Type <- factor(df_nosc$Aquatic_Type)
+df_nosc$Subcategory <- factor(df_nosc$Subcategory,
+                              levels = c("Tundra", "Forest", "Peatland"))
+df_nosc$Compound_Group <- factor(df_nosc$Compound_Group,
+                                 levels = c("Universal", "Unique"))
+df_nosc$group <- interaction(df_nosc$Aquatic_Type, df_nosc$Subcategory)
+```
+
+```{r NOSC Stats}
+analyze_group_nosc <- function(df_subset){
+  # Sample sizes
+  sample_counts <- df_subset %>%
+    group_by(group) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    mutate(group = as.character(group))
+  
+  # ANOVA
+  aov_res <- aov(NOSC ~ group, data = df_subset)
+  
+  # Effect size
+  eta_val <- eta_squared(aov_res)$Eta2[1]
+  
+  # TukeyHSD p-values tidy
+  tukey_df <- as.data.frame(TukeyHSD(aov_res)$group)
+  tukey_df$Comparison <- rownames(tukey_df)
+  rownames(tukey_df) <- NULL
+  tukey_df <- tukey_df %>%
+    dplyr::select(Comparison, `p adj`) %>%
+    dplyr::rename(p_adj = `p adj`)
+  
+  list(
+    Sample_Size = sample_counts,
+    Test = "ANOVA + Tukey",
+    Effect_Size = eta_val,
+    Pairwise = tukey_df
+  )
+}
+
+# -----------------------------
+# 4. Run stats for Universal and Unique
+# -----------------------------
+df_univ_nosc <- df_nosc %>% filter(Compound_Group == "Universal")
+df_unique_nosc <- df_nosc %>% filter(Compound_Group == "Unique")
+
+stats_univ_nosc <- analyze_group_nosc(df_univ_nosc)
+stats_unique_nosc <- analyze_group_nosc(df_unique_nosc)
+
+# -----------------------------
+# 5. Summary tables
+# -----------------------------
+summary_table <- function(stats_obj){
+  df <- stats_obj$Sample_Size
+  df$Effect_Size <- as.numeric(stats_obj$Effect_Size)
+  df$Test <- as.character(stats_obj$Test)
+  df
+}
+
+summary_table_univ_nosc <- summary_table(stats_univ_nosc)
+summary_table_unique_nosc <- summary_table(stats_unique_nosc)
+
+summary_table_univ_nosc
+summary_table_unique_nosc
+
+```
+
+###Mass
+#### Data
+```{r Mass Data}
+df_mass <- df.sl.ft %>%
+  mutate(
+    Compound_Group = case_when(
+      Universal ~ "Universal",
+      !Universal & !Partial ~ "Unique",
+      TRUE ~ "Shared"
+    )
+  ) %>%
+  filter(Compound_Group %in% c("Universal", "Unique"))
+
+# Factor levels
+df_mass$Aquatic_Type <- factor(df_mass$Aquatic_Type)
+df_mass$Subcategory <- factor(df_mass$Subcategory,
+                              levels = c("Tundra", "Forest", "Peatland"))
+df_mass$Compound_Group <- factor(df_mass$Compound_Group,
+                                 levels = c("Universal", "Unique"))
+```
+
+#### Stats
+```{r Mass Stats}
+df_mass <- df_mass %>%
+  mutate(group = interaction(Aquatic_Type, Subcategory))
+
+# -----------------------------
+# 5. Statistics function
+# -----------------------------
+analyze_group <- function(df_subset){
+  # Sample sizes
+  sample_counts <- df_subset %>%
+    group_by(group) %>%
+    summarise(n = n(), .groups = "drop")
+  
+  # ANOVA
+  aov_res <- aov(Mass ~ group, data = df_subset)
+  tukey <- TukeyHSD(aov_res)$group
+  eta <- eta_squared(aov_res)$Eta2
+  
+  list(
+    Sample_Size = sample_counts,
+    Test = "ANOVA + Tukey",
+    Effect_Size = eta,
+    Pairwise = tukey
+  )
+}
+
+# -----------------------------
+# 6. Run stats for Universal and Unique
+# -----------------------------
+stats_univ <- analyze_group(df_univ)
+stats_unique <- analyze_group(df_unique)
+
+# -----------------------------
+# 7. Create tidy summary tables
+# -----------------------------
+summary_table <- function(stats_obj){
+  df <- stats_obj$Sample_Size
+  df$Effect_Size <- stats_obj$Effect_Size
+  df$Test <- stats_obj$Test
+  df
+}
+
+summary_table_univ <- summary_table(stats_univ)
+summary_table_unique <- summary_table(stats_unique)
+
+summary_table_univ
+summary_table_unique
+```
+
+# Linear Regressions
+
+## General Chemistry
+
+```{r Distance to Outlet}
+# ---------------------------
+# Distance variable (updated name)
+# ---------------------------
+
+avg_site_surf$dist_km <- avg_site_surf$DistancetoOutlet_m / 1000
+
+
+# ---------------------------
+# 1️⃣ Flux models
+# ---------------------------
+
+responses <- c(
+  "CO2Flux_gm2d",
+  "pCO2_uatm",
+  "del_DIC",
+  "CN",
+  "DOC_mgL",
+  "TDN_mgL"
+)
+
+lm_table <- map_dfr(responses, function(resp) {
+
+  model <- lm(
+    as.formula(paste(resp, "~ dist_km")),
+    data = avg_site_surf
+  )
+
+  coef_tbl <- tidy(model)
+  fit_tbl <- glance(model)
+
+  slope_row <- coef_tbl %>%
+    filter(term == "dist_km")
+
+  tibble(
+    Response = resp,
+    Slope = slope_row$estimate,
+    SE = slope_row$std.error,
+    p_value = slope_row$p.value,
+    R_squared = fit_tbl$r.squared,
+    N = fit_tbl$nobs
+  )
+})
+
+
+lm_table_pub <- lm_table %>%
+  mutate(
+    Slope = round(Slope, 4),
+    SE = round(SE, 4),
+    p_value = round(p_value, 4),
+    R_squared = round(R_squared, 3)
+  )
+
+
+ft_lm <- flextable(lm_table_pub) %>%
+  set_header_labels(
+    Response = "Response variable",
+    Slope = "Slope\n(distance)",
+    SE = "SE",
+    p_value = "p-value",
+    R_squared = "R²",
+    N = "N"
+  ) %>%
+  autofit() %>%
+  align(j = -1, align = "center", part = "all") %>%
+  align(j = 1, align = "left", part = "all") %>%
+  bold(part = "header") %>%
+  fontsize(size = 10, part = "all") %>%
+  theme_booktabs()
+
+ft_lm <- ft_lm %>%
+  bold(
+    i = which(lm_table_pub$p_value < 0.05),
+    j = "p_value",
+    bold = TRUE,
+    part = "body"
+  )
+
+
+# ---------------------------
+# 2️⃣ FT models (updated dataset + variable names)
+# ---------------------------
+
+responses2 <- c(
+  "NOSC_mean",
+  "Raos_Elemental_Comp",
+  "Shannon_Diversity"
+)
+
+lm_table_2 <- map_dfr(responses2, function(resp) {
+
+  model <- lm(
+    as.formula(paste(resp, "~ dist_km")),
+    data = avg_site_surf
+  )
+
+  coef_tbl <- tidy(model)
+  fit_tbl  <- glance(model)
+
+  slope_row <- coef_tbl %>%
+    filter(term == "dist_km")
+
+  tibble(
+    Response = resp,
+    Slope = slope_row$estimate,
+    SE = slope_row$std.error,
+    p_value = slope_row$p.value,
+    R_squared = fit_tbl$r.squared,
+    N = fit_tbl$nobs
+  )
+})
+
+
+# ---------------------------
+# 3️⃣ Combine tables
+# ---------------------------
+
+lm_table_all <- bind_rows(lm_table_pub, lm_table_2) %>%
+  mutate(
+    Slope = round(Slope, 4),
+    SE = round(SE, 4),
+    p_value = round(p_value, 4),
+    R_squared = round(R_squared, 3)
+  )
+
+
+# ---------------------------
+# 4️⃣ Flextable
+# ---------------------------
+
+ftall <- flextable(lm_table_all) %>%
+  set_header_labels(
+    Response = "Response variable",
+    Slope = "Slope",
+    SE = "SE",
+    p_value = "p-value",
+    R_squared = "R²",
+    N = "N"
+  ) %>%
+  autofit() %>%
+  align(j = -1, align = "center", part = "all") %>%
+  align(j = 1, align = "left", part = "all") %>%
+  bold(part = "header") %>%
+  fontsize(size = 10, part = "all") %>%
+  theme_booktabs()
+
+ftall <- ftall %>%
+  bold(
+    i = which(lm_table_all$p_value < 0.05),
+    j = "p_value",
+    bold = TRUE,
+    part = "body"
+  )
+
+ftall
+# ---------------------------
+# 5️⃣ Export doc
+# ---------------------------
+
+docall <- read_docx() %>%
+  body_add_flextable(ftall)
+
+#print(docall, target = "Supplemental_Table_S4.docx")
+```
+
+## DOM Composition
+
+```{r Linear Regression}
+df_mass <- ft_site_all %>%
+  filter(Aquatic_Type != "Porewater") %>%
+  left_join(
+    compound_flags_pw %>% select(MolecularFormula, unique, universal) %>% distinct(),
+    by = "MolecularFormula"
+  ) %>%
+  mutate(Sharing_Type = case_when(
+    unique ~ "Unique",
+    universal ~ "Universal",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(Sharing_Type))
+
+mass_results <- df_mass %>%
+  group_by(Aquatic_Type, Landcover, Class, Sharing_Type) %>%
+  group_modify(~{
+    df <- .x
+    if(nrow(df) < 3) return(tibble(
+      slope = NA_real_, SE = NA_real_, p_value = NA_real_,
+      R2 = NA_real_, N = nrow(df)
+    ))
+    model <- lm(Mass ~ DistancetoOutlet_m, data = df)
+    slope_row <- tidy(model) %>% filter(term == "DistancetoOutlet_m")
+    glance_mod <- glance(model)
+    tibble(
+      slope = slope_row$estimate,
+      SE = slope_row$std.error,
+      p_value = slope_row$p.value,
+      R2 = glance_mod$r.squared,
+      N = nrow(df)
+    )
+  }) %>% ungroup() %>%
+  mutate(
+    p_value_fmt = ifelse(p_value < 0.05, paste0("**", signif(p_value,3),"**"), signif(p_value,3))
+  )
+mass_results_clean <- mass_results %>%
+  select(-p_value)  # drop the raw numeric column
+
+# Pivot Unique / Universal to same row
+mass_wide <- mass_results_clean %>%
+  pivot_wider(
+    names_from = Sharing_Type,
+    values_from = c(slope, SE, p_value_fmt, R2, N),
+    names_sep = "_"
+  )
+
+# Flextable with spanners
+unique_cols <- grep("_Unique$", names(mass_wide))
+univ_cols   <- grep("_Universal$", names(mass_wide))
+first_cols <- 1:3  # Aquatic_Type, Landcover, Class
+
+
+#-----------------------------
+# 1. Round numeric columns to 3 significant figures
+#-----------------------------
+mass_wide <- mass_wide %>%
+  mutate(across(
+    where(is.numeric),
+    ~ signif(., 3)
+  ))
+
+#-----------------------------
+# 2. Reorder columns: put Universal first, then Unique
+#-----------------------------
+# Identify Universal and Unique columns
+univ_cols <- grep("_Universal$", names(mass_wide), value = TRUE)
+unique_cols <- grep("_Unique$", names(mass_wide), value = TRUE)
+
+# Keep first three columns first
+first_cols <- c("Aquatic_Type", "Landcover", "Class")
+
+# Reorder
+mass_wide <- mass_wide %>%
+  select(all_of(first_cols), all_of(univ_cols), all_of(unique_cols))
+
+#-----------------------------
+# 3. Clean up column labels for flextable
+#-----------------------------
+# Map old column names to simple names
+col_labels <- c(
+  Aquatic_Type = "Aquatic Type",
+  Landcover = "Landcover",
+  Class = "Compound Class"
+)
+
+# Universal columns
+for(col in univ_cols) {
+  if(grepl("slope", col)) col_labels[col] <- "Slope"
+  if(grepl("SE", col)) col_labels[col] <- "SE"
+  if(grepl("p_value_fmt", col)) col_labels[col] <- "P"
+  if(grepl("R2", col)) col_labels[col] <- "R²"
+  if(grepl("^N_", col)) col_labels[col] <- "N"
+}
+
+# Unique columns
+for(col in unique_cols) {
+  if(grepl("slope", col)) col_labels[col] <- "Slope"
+  if(grepl("SE", col)) col_labels[col] <- "SE"
+  if(grepl("p_value_fmt", col)) col_labels[col] <- "p-value"
+  if(grepl("R2", col)) col_labels[col] <- "R²"
+  if(grepl("^N_", col)) col_labels[col] <- "N"
+}
+
+#-----------------------------
+# 4. Flextable with spanners
+#-----------------------------
+ft_mass <- flextable(mass_wide) %>%
+  set_header_labels(values = col_labels) %>%
+  add_header_row(
+    values = c("", "", "", "Universal", "Unique"),
+    colwidths = c(
+      rep(1, length(first_cols)),
+      length(univ_cols),
+      length(unique_cols)
+    )
+  ) %>%
+  align(align = "center", part = "all") %>%
+  autofit()
+
+ft_mass
+#write.csv(mass_wide, "ft_mass.csv", row.names = FALSE)
+#-----------------------------
+# NOSC table (bulk NOSC)
+#-----------------------------
+#-----------------------------
+# 1. Run regressions by Aquatic_Type × Landcover × Sharing_Type
+#-----------------------------
+df_nosc <- ft_site_all %>%
+  filter(Aquatic_Type != "Porewater") %>%
+  left_join(
+    compound_flags_pw %>% select(MolecularFormula, unique, universal) %>% distinct(),
+    by = "MolecularFormula"
+  ) %>%
+  mutate(Sharing_Type = case_when(
+    unique ~ "Unique",
+    universal ~ "Universal",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(Sharing_Type))
+
+nosc_results <- df_nosc %>%
+  group_by(Aquatic_Type, Landcover, Sharing_Type) %>%
+  group_modify(~{
+    df <- .x
+    if(nrow(df) < 3) return(tibble(
+      slope = NA_real_, SE = NA_real_, p_value = NA_real_,
+      R2 = NA_real_, N = nrow(df)
+    ))
+    model <- lm(NOSC ~ DistancetoOutlet_m, data = df)
+    slope_row <- tidy(model) %>% filter(term == "DistancetoOutlet_m")
+    glance_mod <- glance(model)
+    tibble(
+      slope = slope_row$estimate,
+      SE = slope_row$std.error,
+      p_value = slope_row$p.value,
+      R2 = glance_mod$r.squared,
+      N = nrow(df)
+    )
+  }) %>% ungroup() %>%
+  mutate(
+    p_value_fmt = ifelse(p_value < 0.05, paste0("**", signif(p_value,3),"**"), signif(p_value,3))
+  )
+
+#-----------------------------
+# 2. Collapse to one row per Aquatic_Type × Landcover
+#-----------------------------
+nosc_results_clean <- nosc_results %>%
+  group_by(Aquatic_Type, Landcover) %>%
+  summarise(
+    slope_Universal = slope[Sharing_Type == "Universal"][1],
+    SE_Universal = SE[Sharing_Type == "Universal"][1],
+    P_Universal = p_value_fmt[Sharing_Type == "Universal"][1],
+    R2_Universal = R2[Sharing_Type == "Universal"][1],
+    N_Universal = N[Sharing_Type == "Universal"][1],
+    
+    slope_Unique = slope[Sharing_Type == "Unique"][1],
+    SE_Unique = SE[Sharing_Type == "Unique"][1],
+    P_Unique = p_value_fmt[Sharing_Type == "Unique"][1],
+    R2_Unique = R2[Sharing_Type == "Unique"][1],
+    N_Unique = N[Sharing_Type == "Unique"][1],
+    .groups = "drop"
+  ) %>%
+  rename(Landcover = Subcategory)
+
+#-----------------------------
+# 3. Round to 3 significant figures
+#-----------------------------
+nosc_results_clean <- nosc_results_clean %>%
+  mutate(across(where(is.numeric), ~ signif(., 3)))
+
+#-----------------------------
+# 4. Flextable with spanners
+#-----------------------------
+ft_nosc <- flextable(nosc_results_clean) %>%
+  set_header_labels(
+    Aquatic_Type = "Aquatic Type",
+    Landcover = "Landcover",
+    # Universal
+    slope_Universal = "Slope",
+    SE_Universal = "SE",
+    P_Universal = "p-value",
+    R2_Universal = "R²",
+    N_Universal = "N",
+    # Unique
+    slope_Unique = "Slope",
+    SE_Unique = "SE",
+    P_Unique = "p-value",
+    R2_Unique = "R²",
+    N_Unique = "N"
+  ) %>%
+  add_header_row(
+    values = c("", "", "Universal", "Unique"),
+    colwidths = c(1,1,5,5)
+  ) %>%
+  align(align = "center", part = "all") %>%
+  autofit()
+
+ft_nosc
+# Ready tables
+ft_mass  # Mass by compound class
+ft_nosc  # Bulk NOSC
+
+##export to the words
+#-----------------------------
+# 1. Create Word document
+#-----------------------------
+doc <- read_docx()
+
+#-----------------------------
+# 2. Add Mass table
+#-----------------------------
+doc <- doc %>%
+  body_add_par("Mass Regression Results by Compound Class", style = "heading 2") %>%
+  body_add_flextable(ft_mass) %>%
+  body_add_par("", style = "Normal")  # spacer
+
+#-----------------------------
+# 3. Add NOSC table
+#-----------------------------
+doc <- doc %>%
+  body_add_par("Bulk NOSC Regression Results", style = "heading 2") %>%
+  body_add_flextable(ft_nosc)
+
+#-----------------------------
+# 4. Export Word file
+#-----------------------------
+#print(doc, target = "Regression_Results.docx")
+```

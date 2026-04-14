@@ -1,0 +1,1350 @@
+---
+title: "01_ManuscriptFigures"
+author: "CPJ"
+date: "2026-04-01"
+output: 
+  html_document:
+    number_sections: true
+---
+
+This script will produce figures for the manuscript "Peatlands Control Aquatic Carbon Pools and Fluxes in an Arctic Subcatchment".
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning=FALSE, 
+                      message = FALSE)
+```
+
+# Setup
+
+Setting consistent color palettes and installing libraries
+
+```{r Setup, include=FALSE}
+####Load in Libraries####
+library(dplyr)
+library(lubridate)
+library(colorblindcheck)
+library(ggpubr)
+library(rstatix)
+library(readr)
+library(patchwork)
+library(tools)
+library(tidyr)
+library(randomForest)
+library(caret)
+library(ComplexUpset)
+library(ggrepel)
+library(pairwiseAdonis)
+library(flextable)
+library(officer)
+
+####Import Data Frames####
+avg_site_all <- read_csv("avg_site_all.csv")
+ft_site_all <- read_csv("ft_site_all.csv")
+avg_site_surf <- read_csv("avg_site_surf.csv")
+
+####NMDS Dataframes####
+scores_df <- readRDS("nmds_scores_df.rds")
+env_vectors_sig_scaled <- readRDS("nmds_env_vectors_scaled.rds")
+stress_val <- readRDS("nmds_stress.rds")
+r2_pw_df<- read_csv("porewater_perm.csv")
+r2_df<- read_csv("all_perm.csv")
+
+###Random Forest Models###
+final_rf_pco2 <- readRDS("final_rf_pco2.rds")
+final_rf <- readRDS("final_rf.rds")
+imputed_data_pco2<-readRDS("imputed_data_pco2.rds")
+imputed_data<-readRDS("imputed_data.rds") #co2flux
+```
+
+## Plot Styles
+
+Setting up base plotting functions and color palette
+
+```{r Plotting Setup, include=FALSE}
+####Set Palettes###
+reach_colors<- c (
+  "Tundra" = "#9C8C8B", 
+  "Forest" = "#8F9C59",
+  "Peatland" = "#A25933"
+)
+
+reach_shapes<- c (
+  "Lake" = 25, 
+  "Stream" = 21,
+  "Porewater" = 13
+)
+
+palette_check(reach_colors, plot=T) #check color blind friendly
+
+####reorder so they plot in the correct order##
+avg_site_all$Landcover <- factor(avg_site_all$Landcover,
+    levels = c('Tundra','Forest', 'Peatland'),ordered = TRUE)
+avg_site_all$Landcover<-as.factor(avg_site_all$Landcover)
+ft_site_all$Landcover <- factor(ft_site_all$Landcover,
+    levels = c('Tundra','Forest', 'Peatland'),ordered = TRUE)
+ft_site_all$Landcover<-as.factor(ft_site_all$Landcover)
+avg_site_all$Aquatic_Type <- factor(avg_site_all$Aquatic_Type,
+                                levels = c("Stream", "Lake", "Porewater"))
+ft_site_all$Aquatic_Type <- factor(ft_site_all$Aquatic_Type,
+                                levels = c("Stream", "Lake", "Porewater"))
+###make theme####
+my_theme<-function() {
+  theme_bw() +
+  theme(text=element_text(size=16),
+        rect=element_rect(fill="transparent"),
+        strip.background = element_rect(color="black", fill = "#F2F2F2" , size=1.5 ),
+        panel.grid = element_blank(),
+        #axis.title.x=element_text(size=30),
+        axis.title.x=element_blank(),
+        axis.title.y = element_text(size=16), 
+        legend.position = "None",
+        legend.key = element_rect(colour = NA, fill = NA),
+        strip.text=element_text(size=16),
+        axis.text.y =element_text(color="black"),
+        axis.text.x =element_text(color="black", angle=45, hjust=1, size=16),
+        panel.background =element_rect(color="black", fill='transparent', size=1.5),
+        plot.background = element_rect(fill = "white", colour = NA),
+        plot.margin = ggplot2::margin(10,18,10,18))
+
+}
+
+my_theme2 <- function() {
+  theme_bw() +
+    theme(
+      text = element_text(size = 13),
+      plot.background = element_rect(fill = "white", color = NA),
+      strip.background = element_rect(color = "black", fill = "#F2F2F2", size = 1.5),
+      axis.title.x = element_blank(),
+      axis.title.y = element_text(size = 13),
+      legend.position = "right",
+      strip.text = element_text(size = 11),
+      legend.key = element_rect(colour = NA, fill = NA),
+      axis.text.y = element_text(color = "black", size = 13),
+      axis.text.x = element_text(color = "black", size = 13),
+      panel.background = element_rect(fill = "transparent"),
+      panel.grid.major = element_line(color = "grey90"),   # lighter major grids
+      panel.grid.minor = element_line(color = "grey95"),   # even lighter minor grids
+      panel.border = element_rect(color = "black", fill = NA, size = 1.5), # border on top
+      plot.margin = ggplot2::margin(2,3,2,2)
+    )
+}
+
+#### Base plotting function for boxplots###
+plot_flux <- function(df, yvar, ylab_text) {
+  # Remove rows where yvar or Aquatic_Type or Landcover are NA
+  df_clean <- df %>%
+    dplyr::filter(!is.na(.data[[yvar]]), 
+                  !is.na(Aquatic_Type), 
+                  !is.na(Landcover))
+  
+  ggplot(df_clean, aes(x = Aquatic_Type, y = .data[[yvar]], fill = Landcover)) +
+    geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+    geom_jitter(
+      aes(shape = Aquatic_Type),
+      position = position_jitterdodge(jitter.width = 0.35, dodge.width = 0.8),
+      size = 2.5,
+      alpha = 1,
+      stroke = 0.7,
+      show.legend = FALSE
+    ) +
+    scale_fill_manual(values = reach_colors, name = "Landcover Type") +
+    scale_shape_manual(values = reach_shapes) +
+    scale_color_manual(values = reach_colors) +
+    ylab(ylab_text) +
+    my_theme2() +
+    NULL
+}
+
+```
+
+# Figure 3- General Chemistry
+
+*Note that stats bar were added after in Powerpoint*
+
+```{r Figure 2- General Chemistry, echo= FALSE}
+### DOC (NPOC)####
+p1 <- plot_flux(
+  avg_site_all,
+  "DOC_mgL",
+  expression("DOC (mg L"^-1*")")
+  ) +
+  coord_cartesian(ylim = c(0, 17)) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+## TDN ####
+p2 <- plot_flux(
+  avg_site_all,
+  "TDN_mgL",
+ expression("TDN (mg L"^-1*")")
+ ) 
+
+
+## CN ####
+p3 <- plot_flux(
+  avg_site_all,
+  "CN",
+  "DOC:TDN"
+) +
+  coord_cartesian(ylim = c(0, 40)) 
+
+## CO2 Flux ####
+p4 <- plot_flux(
+  avg_site_all,
+  "CO2Flux_gm2d",
+  expression(CO[2]~"Flux"~(g~C~m^-2~d^-1))
+) +
+  #coord_cartesian(ylim = c(0, 250)) + 
+  scale_y_log10(limits = c(0.1, 1500),
+                breaks = c(1, 10,20, 50, 100, 200),
+  labels = c(1, 10,20, 50, 100, 200)
+) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+## pCO2 ####
+p5 <- plot_flux(
+  avg_site_all,
+  "pCO2_uatm",
+  expression(pCO[2]~"("*mu*"atm)")
+) +
+  coord_cartesian(ylim = c(0, 15000)) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+###All####
+fig3<-ggarrange (p5, p4, p1, p2, p3, common.legend = TRUE, legend = "top", ncol = 2, nrow = 3, align = "v")
+fig3
+#ggsave("fig3.png", width=7.5, height=8, units = "in", dpi=600, bg = "white")
+```
+
+# Figure 4 - DOM Composition
+
+## Figure 4a- Van krevelan
+
+### Set up
+
+```{r Figure 4a- Plot Set Up, include= FALSE}
+#### Van Krevelan Set up ####
+##make the rectangles
+classification <- tribble(
+  ~Class, ~OC_low, ~OC_high, ~HC_low, ~HC_high,
+  'Lipid', 0, 0.3, 1.5, 2.5,
+  'Unsat. HC', 0, 0.125, 0.8, 1.5,
+  'Cond. HC', 0, 0.95, 0.2, 0.8,
+  'Protein', 0.3, 0.55, 1.5, 2.3,
+  'Amino sugar', 0.55, 0.7, 1.5, 2.2,
+  'Carbohydrate', 0.7, 1.5, 1.5, 2.5,
+  'Lignin', 0.125, 0.65, 0.8, 1.5,
+  'Tannin', 0.65, 1.1, 0.8, 1.5
+) %>%
+  mutate(label_x = (OC_low + OC_high) / 2,
+         label_y = HC_high - 0.1)
+
+## Compound class rectangles ----
+class_rect <- geom_rect(
+  data = classification,
+  aes(
+    xmin = OC_low,
+    xmax = OC_high,
+    ymin = HC_low,
+    ymax = HC_high
+  ),
+  color = 'black',
+  fill = NA,
+  linewidth = 1,
+  inherit.aes = FALSE,
+  linetype = 'dashed'
+)
+
+rect_label <- geom_label(
+  data = classification,
+  aes(
+    x = label_x,
+    y = label_y,
+    label = Class
+  ),
+  inherit.aes = FALSE,
+  size = 2.5
+)
+```
+
+### Data
+
+```{r Figure 4a - Data set up, include= FALSE}
+####Now Identify Universal Points####
+#Filter out porewater
+ft.surf<-ft_site_all %>%
+  filter(Sample_Type != "porewater")
+
+# Make sure factors are ordered
+ft.surf <- ft.surf %>%
+  mutate(
+    Aquatic_Type = factor(Aquatic_Type, levels = c("Stream", "Lake")),
+    Landcover    = factor(Landcover, levels = c("Tundra", "Forest", "Peatland"))
+  )
+
+# ---- Flag universal and partial compounds ----
+flags <- ft.surf %>%
+  group_by(OC, HC) %>%
+  summarize(
+    n_group = n_distinct(Landcover),   # now using Landcover 
+    total_group = n_distinct(ft.surf$Landcover),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Universal = n_group == total_group,
+    Partial   = n_group > 1 & n_group < total_group
+  ) %>%
+  select(OC, HC, Universal, Partial)
+
+# Join flags back
+ft.surf <- ft.surf %>%
+  left_join(flags, by = c("OC", "HC"))
+```
+
+### Plot
+
+```{r Figure 4- Plot Van Krevelan, echo=FALSE}
+van.p <- ggplot(ft.surf, aes(x = OC, y = HC)) +
+
+  # Universal points
+  geom_point(
+    data = ft.surf %>% filter(Universal == TRUE),
+    shape = 21, fill = "#DADEDF", color = "#DADEDF",
+    size = 1, alpha = 0.5
+  ) +
+
+  # Partial shared points
+  geom_point(
+    data = ft.surf %>% filter(Partial == TRUE),
+    shape = 21, fill = "#ADD8E6", color = "#ADD8E6",
+    size = 1, alpha = 0.5
+  ) +
+
+  # Unique points (colored by Landcover)
+  geom_point(
+    data = ft.surf %>% filter(!Universal & !Partial),
+    aes(fill = Landcover),
+    size = 3, shape = 21, color = "black"
+  ) +
+
+  class_rect +
+  rect_label +
+
+  scale_fill_manual(values = reach_colors) +
+
+  facet_grid(
+    rows = vars(Aquatic_Type),
+    cols = vars(Landcover),
+    scales = "free"
+  ) +
+
+  my_theme() +
+  labs(x = "O/C", y = "H/C", fill = "Unique Compounds") +
+
+  theme(
+    axis.title.x = element_text(size = 13),
+    axis.text.x = element_text(size = 13)
+  ) +
+
+  guides(
+    fill = guide_legend(
+      title.position = "top",
+      override.aes = list(size = 10)
+    )
+  )
+van.p
+
+##Now we need to steal the legend from this plot since it's not coming through properly
+ggplot(ft.surf, aes(x = OC, y = HC)) +
+
+  # Universal points (grey)
+  geom_point(
+    data = ft.surf %>% filter(Universal),
+    aes(fill = "Universal")   # map to legend
+    , color = "#DADEDF",
+    size = 3
+  ) +
+
+  # Partial points (blue)
+  geom_point(
+    data = ft.surf %>% filter(Partial),
+    aes(fill = "Partial"),     # map to legend
+     color = "#ADD8E6",
+    size = 3
+  ) +
+
+  # Subcategory points (no legend)
+  geom_point(
+    data = ft.surf %>% filter(!Universal & !Partial),
+    aes(x = OC, y = HC), size = 3, color = "black", fill = "white" # adjust color as you like
+  ) +
+
+  class_rect +
+  rect_label +
+
+  # Only include Universal and Partial in the legend
+  scale_fill_manual(
+    name = "Common Compounds",
+    values = c("Universal" = "#DADEDF", "Partial" = "#ADD8E6")
+  ) +
+
+  facet_grid(rows = vars(Aquatic_Type), cols = vars(Landcover), scales = "free") +
+
+  my_theme() +
+  labs(x = "O/C", y = "H/C") +
+
+  theme(
+    axis.title.x = element_text(size = 13),
+    legend.position = "top",
+    legend.direction = "horizontal",
+    legend.justification = "left",
+    legend.box = "horizontal",
+    legend.key = element_rect(colour = NA, fill = NA),
+    legend.text = element_text(size = 13),
+    axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 13)
+  ) +
+  guides(
+    fill = guide_legend(
+      title.position = "top",
+      override.aes = list(size = 8, color = c("#ADD8E6", "#DADEDF"))
+    )
+  )
+```
+
+##Figure 4b - Upset
+
+###Data
+
+```{r Figure 4b- Data, include=FALSE}
+#--------------------------------------------------
+# 1. Filter out Porewater and keep unique formulas
+#--------------------------------------------------
+df.comp_pw <- ft_site_all %>%
+  filter(!is.na(Landcover), Aquatic_Type != "Porewater") %>%
+  distinct(MolecularFormula, Aquatic_Type, Landcover, Class)
+
+#--------------------------------------------------
+# 2. Create presence / absence matrix
+#--------------------------------------------------
+presence_pw <- df.comp_pw %>%
+  mutate(Group = paste(Aquatic_Type, Landcover, sep = "_")) %>%
+  select(MolecularFormula, Group) %>%
+  distinct() %>%
+  mutate(present = 1) %>%
+  pivot_wider(
+    names_from  = Group,
+    values_from = present,
+    values_fill = 0
+  )
+
+#--------------------------------------------------
+# 3. Convert to logical matrix for ComplexUpset
+#--------------------------------------------------
+upset_data <- presence_pw %>%
+  select(-MolecularFormula) %>%
+  mutate(across(everything(), ~ . == 1))
+
+#--------------------------------------------------
+# 4. Reorder columns: Stream first, Lake second
+#--------------------------------------------------
+stream_cols <- grep("^Stream", names(upset_data), value = TRUE)
+lake_cols   <- grep("^Lake", names(upset_data), value = TRUE)
+
+# Optional: enforce landcover order within each aquatic type
+stream_cols <- stream_cols[match(
+  c("Stream_Tundra", "Stream_Forest", "Stream_Peatland"),
+  stream_cols
+)]
+
+lake_cols <- lake_cols[match(
+  c("Lake_Tundra", "Lake_Forest", "Lake_Peatland"),
+  lake_cols
+)]
+
+new_order <- c(stream_cols, lake_cols)
+new_order <- new_order[!is.na(new_order)]
+
+upset_data <- upset_data[, new_order]
+
+#--------------------------------------------------
+# 5. Clean labels for display
+#--------------------------------------------------
+colnames(upset_data) <- gsub("_", " ", colnames(upset_data))
+
+```
+
+###Plot
+
+```{r Figure 4b- Upset Plot, echo=FALSE}
+up.p <- upset(
+  upset_data,
+  colnames(upset_data),
+  sort_sets = FALSE,
+
+  # control relative panel sizes
+  width_ratio = 0.15,   # left bar panel (set sizes)
+  height_ratio = 0.6,   # top panel (intersection sizes)
+
+  # base annotations (intersection size bars)
+  base_annotations = list(
+    "Intersection size" = intersection_size(
+  counts = FALSE,
+  fill = "steelblue"
+) +
+  scale_y_continuous(
+    breaks = seq(0, 3000, 500)
+  ) +
+  theme(
+    # Pull y-axis label closer to the bars
+    axis.title.y = element_text(
+      angle = 90,                   # vertical
+      vjust = -20,                  # adjust vertical position along panel
+      hjust = 0.5,                  # adjust horizontal alignment
+      margin = ggplot2::margin(r = 2) # minimal space to bars
+    ),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+  ),
+
+  # set sizes (left panel bars)
+  set_sizes = upset_set_size(
+    geom = geom_bar(fill = "steelblue")
+  ) +
+    theme(
+      # move set size label closer
+      axis.title.x = element_text(
+        margin = ggplot2::margin(t = 2)
+      ),
+      # remove y-axis "group" numbers
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank()
+    )
+) +
+  theme_minimal(base_size = 13) +
+  theme(
+    # x-axis text for set labels (rotate if long)
+    axis.text.x = element_blank(),
+
+    # remove all remaining axis titles
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+
+    # tight spacing
+    panel.spacing = unit(0.2, "lines"),
+    plot.margin = ggplot2::margin(2, 2, 2, 2)
+  )
+
+up.p
+```
+
+##Figure 4c - Bar Plot
+
+###Data
+
+```{r Figure 4c- Data, include=FALSE}
+#--------------------------------------------------
+# 1. Remove porewater + define compound groups
+#--------------------------------------------------
+df_comp <- ft.surf %>%
+  mutate(
+    Compound_Group = case_when(
+      Universal ~ "Universal",
+      !Universal & !Partial ~ "Unique",
+      TRUE ~ "Shared"
+    )
+  ) %>%
+  filter(Compound_Group %in% c("Universal", "Unique"))
+
+#--------------------------------------------------
+# 2. Summarize composition
+#--------------------------------------------------
+df_plot <- df_comp %>%
+  group_by(Aquatic_Type, Landcover, Compound_Group, Class) %>%
+  summarise(
+    Count = mean(NormIntensity, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(Aquatic_Type, Landcover, Compound_Group) %>%
+  mutate(
+    Perc = Count / sum(Count) * 100
+  )
+
+#--------------------------------------------------
+# 3. Factor ordering
+#--------------------------------------------------
+df_plot$Landcover <- factor(
+  df_plot$Landcover,
+  levels = c("Tundra", "Forest", "Peatland")
+)
+
+df_plot$Compound_Group <- factor(
+  df_plot$Compound_Group,
+  levels = c("Universal", "Unique")
+)
+
+df_plot$Class <- factor(
+  df_plot$Class,
+  levels = c(
+    "Cond. HC",
+    "Tannin",
+    "Lignin",
+    "Unsat. HC",
+    "Protein",
+    "Amino sugar",
+    "Carbohydrate",
+    "Lipid",
+    "Other"
+  )
+)
+
+df_plot$Aquatic_Type <- factor(
+  df_plot$Aquatic_Type,
+  levels = c("Stream", "Lake")
+)
+
+```
+
+###Plot
+
+```{r Figure 4c- Plot, echo=FALSE}
+class_colors <- c(
+   "Lipid"        = "#E6B89C",  # Soft peach/orange
+  "Unsat. HC"    = "#D4C67A",  # Muted yellow-green
+  "Cond. HC"     = "#C4886B",  # Warm terracotta
+  "Protein"      = "#7BAF91",  # Soft muted teal
+  "Amino sugar"  = "#A7C9C2",  # Light teal/blue
+  "Carbohydrate" = "#7C9AC8",  # Soft blue
+  "Lignin"       = "#B08DA0",  # Dusty pink/lavender
+  "Tannin"       = "#9E8F83" ,  # Muted warm gray
+  "Other"        = "#B8C0C8"   # Soft gray-blue
+)
+
+comp.bar <- ggplot(df_plot, aes(x = Landcover, y = Perc, fill = Class)) +
+  geom_col(color = "black") +
+  scale_fill_manual(values = class_colors) +
+  facet_grid(Compound_Group ~ Aquatic_Type) +
+  my_theme2() +
+  theme(
+    text = element_text(size = 13),
+    legend.position = "right",
+    legend.key = element_rect(colour = NA, fill = NA),
+    axis.title.y = element_blank(),
+    axis.title.x = element_text()
+  ) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  coord_flip() +
+  labs(y = "Percent (%)", x = NULL)
+
+# comp.bar
+```
+
+## Figure 4- All
+
+Now put it all together
+
+```{r Figure 4- All, echo=FALSE}
+ggarrange(van.p, up.p, comp.bar, nrow=3, heights = c(2, 1, 1), widths = c(1,1,1.3))
+ggsave("fig4.png", width=9, height=12, units = "in", dpi=600, bg = "white")
+```
+
+# Figure 5- NOSC and Weight
+
+##Data
+
+```{r Data, include=FALSE}
+df_mass <- ft.surf %>%
+  mutate(
+    Compound_Group = case_when(
+      Universal ~ "Universal",
+      !Universal & !Partial ~ "Unique",
+      TRUE ~ "Shared"
+    )
+  ) %>%
+  filter(Compound_Group %in% c("Universal", "Unique"))
+
+# Factor levels
+df_mass$Aquatic_Type <- factor(df_mass$Aquatic_Type)
+df_mass$Subcategory <- factor(df_mass$Landcover,
+                              levels = c("Tundra", "Forest", "Peatland"))
+df_mass$Compound_Group <- factor(df_mass$Compound_Group,
+                                 levels = c("Universal", "Unique"))
+```
+
+##Plots
+
+```{r NOSC Plot, echo=FALSE}
+nosc_violin_facet <- ggplot(df_mass, aes(x = Aquatic_Type, y = NOSC, fill = Landcover)) +
+  geom_violin(alpha = 0.6, trim = FALSE, position = position_dodge(width = 0.8)) +
+  geom_boxplot(width = 0.12, position = position_dodge(width = 0.8),
+               outlier.shape = NA, alpha = 0.7) +
+  scale_fill_manual(values = reach_colors, name = "Landcover Type") +
+  scale_shape_manual(values = reach_shapes) +
+  scale_color_manual(values = reach_colors) +
+  facet_wrap(~Compound_Group) +
+  ylab("NOSC") +
+  ylim(-2.5,3) +
+  my_theme2() +
+  NULL
+
+nosc_violin_facet
+```
+
+```{r Mass Plot, echo=FALSE}
+mass_violin_facet <- ggplot(df_mass, aes(x = Aquatic_Type, y = Mass, fill = Landcover)) +
+  geom_violin(alpha = 0.6, trim = FALSE, position = position_dodge(width = 0.8)) +
+  geom_boxplot(width = 0.12, position = position_dodge(width = 0.8),
+               outlier.shape = NA, alpha = 0.7) +
+  scale_fill_manual(values = reach_colors, name = "Landcover Type") +
+  scale_shape_manual(values = reach_shapes) +
+  scale_color_manual(values = reach_colors) +
+  ylim(0,1350) +
+  facet_wrap(~Compound_Group) +  # faceted by Universal / Unique
+  ylab("Mass (Da)") +
+  my_theme2() +
+  NULL
+
+mass_violin_facet
+```
+
+```{r Plot save, echo=FALSE}
+nm_fac<-ggarrange(nosc_violin_facet, mass_violin_facet, ncol = 1, nrow = 2,common.legend = TRUE,
+  legend = "right")
+nm_fac
+
+ggsave(
+  "fig5.png",
+  width = 10,
+  height = 10,  
+  dpi = 600,
+  bg = "white"
+)
+```
+
+# Figure 6 - DIC
+
+##Stats
+
+```{r Stats for the plot, include=FALSE}
+#filter out porewater 
+avg_site_surf<-avg_site_all %>%
+  filter(Sample_Type != "porewater")
+
+# Fit linear model
+model <- lm(del_DIC ~ DistancetoOutlet_m, data = avg_site_surf)
+model_summary <- summary(model)
+
+# Extract stats
+r2 <- round(model_summary$r.squared, 3)
+p_value <- signif(coef(model_summary)[2, 4], 3)
+
+# Optional: format p-value display
+p_label <- ifelse(p_value < 0.001, "p < 0.001", paste0("p = ", p_value))
+label_text <- paste0("R² = ", r2, "\n", p_label)
+```
+
+##Plot
+
+```{r DIC Figure, echo=FALSE}
+ggplot(avg_site_surf, aes(x = DistancetoOutlet_m, y = del_DIC)) +
+  geom_point(aes(shape = Aquatic_Type, fill = Landcover), 
+             size = 3, color = "black", stroke = 0.6) +
+  scale_fill_manual(values = reach_colors) +
+  scale_shape_manual(values = reach_shapes) +
+  geom_smooth(aes(group = 1), method = "lm", se = FALSE, color = "black") +  # single LM line
+  labs(
+    x = "Distance from Mouth (m)",
+    y = expression(delta^13*C-DIC~"(\u2030)"),
+    shape = "Aquatic Environment",
+    fill = "Landcover Type"
+  ) +
+  guides(
+  fill = guide_legend(override.aes = list(shape = 21, color = "black", size = 5))
+) +
+  annotate("text",
+           x = 10500,
+           y = 0,
+           label = label_text,
+           hjust = 0, vjust = 1, size = 5) +
+  my_theme2() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5, size = 13),
+    axis.text.y = element_text(size = 13),
+    panel.grid.major = element_line(color = "grey80"),
+    panel.grid.minor = element_blank(),
+    axis.title.x = element_text(size = 13),
+    axis.title.y  = element_text(size = 13),
+    legend.position = "right",
+    legend.key = element_rect(colour = NA, fill = NA),
+    legend.text = element_text(size = 13)
+  ) + 
+  scale_x_reverse(limits = c(10500, 0)) +
+  scale_y_continuous(limits = c(-20, 0))
+
+ggsave("fig6.png", width=8, height=4, units = "in", dpi=600, bg = "white")
+```
+
+# Figure 7 - NMDS
+
+## Plots
+
+###NMDS
+
+```{r NMDS Plot, echo=FALSE}
+env_vectors_sig_scaled <- env_vectors_sig_scaled %>%
+  mutate(Variable = recode(Variable,
+                           "Unsat_HC" = "Unsat. HC",
+                           "Cond_HC" = "Cond. HC",
+                           "NOSC_mean" = "NOSC",
+                           "Shannon_Diversity" = "Shannon Diversity"))
+
+nmdsp<-ggplot(scores_df, aes(x = NMDS1, y = NMDS2)) +
+  # Fillable shapes: Stream and Lake
+  geom_point(
+    data = scores_df %>% filter(Aquatic_Type %in% c("Stream", "Lake")),
+    aes(shape = Aquatic_Type, fill = Landcover),
+    color = "black",
+    size = 3
+  ) +
+  # Non-fillable shape: Porewater
+  geom_point(
+    data = scores_df %>% filter(Aquatic_Type == "Porewater"),
+    aes(shape = Aquatic_Type, color = Landcover),
+    size = 3
+  ) +
+  # Shape and color scales
+  scale_shape_manual(name = "Aquatic Environment", values = reach_shapes) +
+  scale_fill_manual(values = reach_colors) +
+  scale_color_manual(values = reach_colors) +
+  # Ellipses: dotted lines, colored by Landcover
+  stat_ellipse(
+    aes(group = Landcover, color = Landcover),
+    type = "t",
+    geom = "path",
+    linetype = "dashed",
+    fill = NA,
+    show.legend = FALSE
+  ) +
+  # Envfit arrows
+  geom_segment(
+    data = env_vectors_sig_scaled,
+    aes(x = 0, y = 0, xend = MDS1, yend = MDS2),
+    arrow = arrow(length = unit(0.3, "cm")),
+    color = "black",
+    inherit.aes = FALSE
+  ) +
+  geom_text_repel(
+    data = env_vectors_sig_scaled,
+    aes(x = MDS1, y = MDS2, label = Variable),
+    size = 3.5,
+    segment.color = "black",
+    inherit.aes = FALSE
+  ) +
+  annotate(
+    "text",
+    x = Inf, y = -Inf,
+    label = paste("Stress =", stress_val),
+    hjust = 1.1, vjust = -0.5,
+    size = 5
+  ) +
+  # Light background grid + panel border
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(),
+    axis.title.x = element_text(),
+    axis.text.y = element_text(),
+    axis.title.y = element_text(),
+    legend.position = "right",
+    legend.key = element_blank(),
+    panel.grid.major = element_line(color = "gray85"),
+    panel.grid.minor = element_line(color = "gray90"),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.7)
+  )
+nmdsp
+```
+
+###Bar Plots
+
+```{r Plot, echo=FALSE}
+r2_pw_plot <- r2_pw_df %>%
+  arrange(R2) %>%
+  mutate(System = factor(System, levels = System)) %>%
+  ggplot(aes(x = System, y = R2)) +
+  geom_col(fill = "#7C9AC8") +
+  geom_text(aes(label = Signif), hjust = -0.2, size = 6) +
+  coord_flip() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(title = "Surface:Porewater", y = expression(R^2), x = "") +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.title.y = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.8)
+  )
+
+r2_all_plot <- r2_df %>%
+  arrange(R2) %>%
+  mutate(Model = factor(Model, levels = Model)) %>%
+  ggplot(aes(x = Model, y = R2)) +
+  geom_col(fill = "#7C9AC8") +
+  geom_text(aes(label = Signif), hjust = -0.2, size = 6) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  coord_flip() +
+  labs(title= "Surface", y = expression(R^2), x = "") +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.title.y = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.8)
+  )
+
+comb_perm <- ggarrange(
+  r2_all_plot, r2_pw_plot,
+  ncol = 2
+)
+
+comb_perm
+```
+
+```{r Save, echo=FALSE}
+ggarrange(
+  nmdsp, comb_perm,
+  ncol = 1,
+  nrow = 2,
+  #widths = c(1, 2, 1),  # makes the center column wider
+  heights = c(2, 1)     # adjust relative heights of top vs bottom
+)
+ggsave("fig7.png", width=8, height=8, units = "in", dpi=600, bg = "white")
+```
+
+# Figure 8 - Random Forest Model
+
+## Figure 8a - pCO2
+
+```{r pCO2, echo=FALSE}
+clean_labels <- function(x) {
+  x[x == "Raos_Elemental_Comp"] <- "Elemental Diversity"
+  x[x == "pCO2_uatm"] <- "pCO2"
+  x[x == "DOC_mgL"] <- "DOC"
+   x[x == "TDN_mgL"] <- "TDN"
+  x <- gsub("_qbased|_mean", "", x)  # remove qbased/mean
+   x <- gsub("DistancetoOutlet_m", "Distance to Outlet", x, ignore.case = TRUE)
+   x <- gsub("_", " ", x)             # replace underscores with spaces
+  x <- gsub("\\.x|\\.y", "", x)      # remove .x/.y
+  x <- gsub("CN", "C:N", x, ignore.case = TRUE)
+  x[x == "Landcover"] <- "Landcover Type"  # rename Reach_Type
+  x <- toTitleCase(x)                 # optional: title case
+  x <- gsub("K600", "k600", x, ignore.case = TRUE)
+  x
+}
+# Extract %IncMSE
+mse_df_pco2 <- data.frame(
+  Variable = rownames(importance(final_rf_pco2)),
+  IncMSE = as.numeric(importance(final_rf_pco2)[, "%IncMSE"]),
+  stringsAsFactors = FALSE
+)
+
+# Sort
+mse_df_pco2 <- mse_df_pco2[order(mse_df_pco2$IncMSE, decreasing = TRUE), ]
+
+# Plot
+rf_mse_pco2 <- ggplot(mse_df_pco2, aes(x = reorder(Variable, IncMSE), y = IncMSE)) +
+  geom_col(fill = "#7C9AC8") +
+  coord_flip() +
+  scale_x_discrete(labels = clean_labels) +
+  labs(
+    title = expression("Random Forest on pCO"[2]),
+    x = "Variable",
+    y = "%IncMSE"
+  ) +
+  my_theme2() +
+  theme(
+    axis.title.x = element_text(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+  )
+rf_mse_pco2
+```
+
+## Figure 8b
+
+### Data
+
+```{r pCO2 Partial Dependence Plots Data, echo=FALSE}
+c_pd <- pdp::partial(
+  object = final_rf_pco2,
+  pred.var = "Raos_Elemental_Comp",
+  train = imputed_data_pco2
+)
+
+
+
+tan_pd <- pdp::partial(
+  object = final_rf_pco2,
+  pred.var = "Tannin",
+  train = imputed_data_pco2
+)
+
+n_pd <- pdp::partial(
+  object = final_rf_pco2,
+  pred.var = "TDN_mgL",
+  train = imputed_data_pco2
+)
+```
+
+### Plots
+
+```{r Partial Dependence Plots, echo=FALSE}
+### 1. Get shared y-axis limits
+
+
+y_min <- min(c(c_pd$yhat,
+               tan_pd$yhat,
+               n_pd$yhat), na.rm = TRUE)
+
+y_max <- max(c(c_pd$yhat,
+               tan_pd$yhat,
+               n_pd$yhat), na.rm = TRUE)
+
+### Create individual plots
+
+c_plot <- ggplot(c_pd, aes(x = Raos_Elemental_Comp, y = yhat)) +
+  geom_line(size = 1.5, color = "#7C9AC8") +
+  labs(x = "Rao's Elemental Diversity", y = NULL) +
+  my_theme2() +
+  scale_y_continuous(limits = c(y_min, y_max)) +
+  theme(axis.title.x = element_text())
+  c_plot
+
+tan_plot <- ggplot(tan_pd, aes(x = Tannin, y = yhat)) +
+  geom_line(size = 1.5, color = "#7C9AC8") +
+  labs(x = "Tannins (Rel Abundance)", y = NULL) +
+  my_theme2() +
+  scale_y_continuous(limits = c(y_min, y_max)) +
+  theme(axis.title.x = element_text())
+
+n_plot <- ggplot(n_pd, aes(x = TDN_mgL, y = yhat)) +
+  geom_line(size = 1.5, color = "#7C9AC8") +
+  labs(x = expression("TDN (mg L"^-1*")"), y = NULL) +
+  my_theme2() +
+  scale_y_continuous(limits = c(y_min, y_max)) +
+  theme(axis.title.x = element_text())
+
+###Arrange plots
+
+pco2_pp <- ggarrange(
+  c_plot, tan_plot, n_plot,
+  ncol = 1,
+  nrow = 3,
+  align = "v"
+) 
+
+pco2_pp<-annotate_figure(
+  pco2_pp,
+  left = text_grob(
+    expression(pCO[2]~"("*mu*"atm)"),
+    rot = 90,
+    size = 13
+  )
+)
+pco2_pp
+
+```
+
+## Figure 8c - CO2 Flux
+
+```{r Random Forest CO2 Flux, echo=FALSE }
+# Extract the true %IncMSE column exactly as randomForest uses it
+mse_df <- data.frame(
+  Variable = rownames(importance(final_rf)),
+  IncMSE = as.numeric(importance(final_rf)[, "%IncMSE"]),
+  stringsAsFactors = FALSE
+)
+mse_df
+# Sort highest to lowest
+mse_df <- mse_df[order(mse_df$IncMSE, decreasing = TRUE), ]
+
+rf_mse_flux <- ggplot(mse_df, aes(x = reorder(Variable, IncMSE), y = IncMSE)) +
+  geom_col(fill = "#7C9AC8") +
+  coord_flip() +
+  scale_x_discrete(labels = clean_labels) +
+  labs(
+   title = expression("Random Forest on CO"[2]~ "Flux"),
+    x = "Variable",
+    y = "%IncMSE"
+  ) +
+  my_theme2() +
+  theme(axis.title.x = element_text(),
+        panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  axis.title.y = element_blank(),
+  plot.title = element_text(hjust = 0.5))
+
+rf_mse_flux
+ggsave("CO2fluxrf.png", width=8, height=8, units = "in", dpi=600, bg = "white")
+```
+
+## Figure 8d
+
+### Data
+
+```{r CO2 Flux Partial Dependence Plots Data, echo=FALSE}
+pd_k <- pdp::partial(
+  object = final_rf,
+  pred.var = "k600",
+  train = imputed_data
+)
+
+
+
+pd_sl <- pdp::partial(
+  object = final_rf,
+  pred.var = "Slope",
+  train = imputed_data
+)
+
+pd_land <- pdp::partial(
+  object = final_rf,
+  pred.var = "Landcover",
+  train = imputed_data
+)
+```
+
+### Plots
+
+```{r Partial Dependence Plots CO2 Flux, echo=FALSE}
+### 1. Get shared y-axis limits
+
+
+y_min <- min(c(pd_k$yhat,
+               pd_sl$yhat,
+               pd_land$yhat), na.rm = TRUE)
+
+y_max <- max(c(pd_k$yhat,
+               pd_sl$yhat,
+               pd_land$yhat), na.rm = TRUE)
+
+### Create individual plots
+
+k_plot <- ggplot(pd_k, aes(x = k600, y = yhat)) +
+  geom_line(size = 1.5, color = "#7C9AC8") +
+  labs(x = expression(k[600]~"(m d"^{-1}*")"), y = NULL) +
+  my_theme2() +
+  scale_y_continuous(limits = c(y_min, y_max)) +
+  theme(axis.title.x = element_text())
+  
+
+s_plot <- ggplot(pd_sl, aes(x = Slope, y = yhat)) +
+  geom_line(size = 1.5, color = "#7C9AC8") +
+  labs(x = "Slope", y = NULL) +
+  my_theme2() +
+  scale_y_continuous(limits = c(y_min, y_max)) +
+  theme(axis.title.x = element_text())
+
+land_plot <- ggplot(pd_land, aes(x = Landcover, y = yhat)) +
+  geom_point(
+    size = 6,
+    shape = 21,              # allows fill + outline
+    fill = "#7C9AC8",        # inside color (your blue)
+    color = "black",         # outline color
+    stroke = 1             # outline thickness (adjust if needed)
+  ) +
+  labs(x = "Landcover Type", y = NULL) +
+  my_theme2() +
+  scale_y_continuous(limits = c(y_min, y_max)) +
+  theme(axis.title.x = element_text())
+
+###Arrange plots
+
+co2_pp <- ggarrange(
+  k_plot, s_plot, land_plot,
+  ncol = 1,
+  nrow = 3,
+  align = "v"
+)
+
+co2_pp<- annotate_figure(
+  co2_pp,
+  left = text_grob(
+    expression(CO[2]~"Flux (g C m"^-2*~"d"^-1*")"),
+    rot = 90,
+    size = 13
+  )
+)
+co2_pp
+```
+
+##Figure 8 all
+
+```{r Figure 8 All, echo=FALSE}
+rf_mse_pco2<- rf_mse_pco2 + theme(plot.margin = ggplot2::margin(t = 0, r = 30, b = 0, l = 0))
+r<-ggarrange(rf_mse_pco2, pco2_pp, ncol=2)
+r<- r +  theme(plot.margin = ggplot2::margin(t = 0, r = 0, b = 15, l = 0))
+
+rf_mse_flux<-rf_mse_flux + theme(plot.margin = ggplot2::margin(t = 0, r = 30, b = 0, l = 0))
+r_f<-ggarrange(rf_mse_flux, co2_pp, ncol=2)
+r_f<- r_f +  theme(plot.margin = ggplot2::margin(t = 15, r = 0, b = 0, l = 0))
+
+fig8all<-ggarrange(r, r_f, nrow=2)
+fig8all
+
+ggsave("Fig8.png", width=10, height=12, units = "in", dpi=600, bg = "white")
+```
+
+# Table 1
+
+Table was further tweaked in word for visuals
+
+```{r Table 1 Summary, echo=FALSE}
+summary_tbl <- avg_site_surf %>%
+  group_by(Aquatic_Type, Landcover) %>%
+  summarise(
+    n = n(),
+    # CO2 flux
+    co2flux_mean   = mean(CO2Flux_gm2d, na.rm = TRUE),
+    co2flux_median = median(CO2Flux_gm2d, na.rm = TRUE),
+    co2flux_sd     = sd(CO2Flux_gm2d, na.rm = TRUE),
+    co2flux_min    = min(CO2Flux_gm2d, na.rm = TRUE),
+    co2flux_max    = max(CO2Flux_gm2d, na.rm = TRUE),
+
+    # pCO2 (numeric column!)
+    pco2_mean   = mean(pCO2_uatm, na.rm = TRUE),
+    pco2_median = median(pCO2_uatm, na.rm = TRUE),
+    pco2_sd     = sd(pCO2_uatm, na.rm = TRUE),
+    pco2_min    = min(pCO2_uatm, na.rm = TRUE),
+    pco2_max    = max(pCO2_uatm, na.rm = TRUE),
+
+    .groups = "drop"
+  )
+
+summary_stats <- function(x) {
+  tibble(
+    Mean   = mean(x, na.rm = TRUE),
+    Median = median(x, na.rm = TRUE),
+    SD     = sd(x, na.rm = TRUE),
+    Min    = min(x, na.rm = TRUE),
+    Max    = max(x, na.rm = TRUE)
+  )
+}
+
+# By Reach Type
+by_reach <- avg_site_surf %>%
+  group_by(Aquatic_Type, Landcover) %>%
+  summarise(
+    n = n(),
+    co2flux = list(summary_stats(CO2Flux_gm2d)),
+    pco2    = list(summary_stats(pCO2_uatm)),
+    .groups = "drop"
+  ) %>%
+  unnest(c(co2flux, pco2), names_sep = "_")
+
+# Overall summary
+overall <- avg_site_surf %>%
+  group_by(Aquatic_Type) %>%
+  summarise(
+    Landcover = "",
+    n = n(),
+    co2flux = list(summary_stats(CO2Flux_gm2d)),
+    pco2    = list(summary_stats(pCO2_uatm)),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Aquatic_Type = paste("Overall", Aquatic_Type)
+  ) %>%
+  unnest(c(co2flux, pco2), names_sep = "_")
+
+# Combine
+final_table <- bind_rows(by_reach, overall)
+
+final_table <- final_table %>%
+  mutate(Blank = " ") %>%   # insert a blank column
+  select(Aquatic_Type, Landcover, n,
+         co2flux_Mean, co2flux_Median, co2flux_SD, co2flux_Min, co2flux_Max,
+         Blank,
+         pco2_Mean, pco2_Median, pco2_SD, pco2_Min, pco2_Max)
+final_table <- final_table %>%
+  mutate(
+    across(
+      where(is.numeric) & !matches("^n$"),
+      ~ round(.x, 2)
+    )
+  )
+last_row <- nrow(final_table)
+
+ft <- flextable(final_table)
+
+# Rename the Aquatic_Type column
+ft <- set_header_labels(ft, 
+                        Aquatic_Type = "Aquatic Type",
+                        Landcover = "Landcover Type",
+                        co2flux_Mean   = "Mean",
+                        co2flux_Median = "Median",
+                        co2flux_SD     = "SD",
+                        co2flux_Min    = "Min",
+                        co2flux_Max    = "Max",
+                        Blank = " ",
+                        pco2_Mean      = "Mean",
+                        pco2_Median    = "Median",
+                        pco2_SD        = "SD",
+                        pco2_Min       = "Min",
+                        pco2_Max       = "Max"
+)
+
+# Add spanner headers
+ft <- add_header_row(
+  ft,
+  values = c("", "", "", "CO2 flux (g m⁻² d⁻¹)", " ", "pCO2 (µatm)"),
+  colwidths = c(1, 1, 1, 5, 1, 5)
+)
+
+# Center everything
+ft <- align(ft, align = "center", part = "all")
+
+# Horizontal line under units (numeric columns only, stop at blank)
+ft <- hline(
+  ft,
+  i = 1,                    # spanner row
+  j = c(3:7, 9:13),         # numeric columns only
+  border = fp_border(width = 1),
+  part = "header"
+)
+
+# Bold Overall row
+ft <- bold(ft, i = last_row, bold = TRUE)
+
+# Thick line above Overall row
+ft <- hline(
+  ft,
+  i = last_row,
+  border = fp_border(width = 2),
+  part = "body"
+)
+
+# Auto-adjust widths
+ft <- autofit(ft)
+
+ft
+doc <- read_docx() %>%
+  body_add_flextable(ft)  # 'ft' is your formatted flextable
+
+# Save it
+print(doc, target = "CO2_pCO2_summary.docx")
+
+#write.csv(final_table, "CO2_pCO2_summary.csv", row.names = FALSE)
+```
