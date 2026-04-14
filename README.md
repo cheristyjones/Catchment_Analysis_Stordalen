@@ -1,4 +1,4 @@
-# Catchment_Analysis_Stordalen
+# Code for the manuscript "Peatlands Control Aquatic Carbon Pools and Fluxes in an Arctic Subcatchment"
 This repository contains data, scripts, and data processing for the manuscript "Peatlands Control Aquatic Carbon Pools and Fluxes in an Arctic Subcatchment", currently in review at JGR: Biogeosciences. This project investigates the spatial variability of aquatic C emissions and landscape connectivity throughout an Arctic subcatchment using DOM characterization and CO2 flux measurements. 
 
 Zenodo doi coming soon. 
