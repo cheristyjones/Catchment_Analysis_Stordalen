@@ -1,0 +1,76 @@
+Column,Dataset,Description
+Plot,"avg_site_all, ft_site_all",Name of plot
+SampleID,"avg_site_all, ft_site_all",Individual sample identification tag
+Sample_Type,"avg_site_all, ft_site_all",Porewater or surface water sample
+Aquatic_Type,"avg_site_all, ft_site_all",Freshwater environment
+Date,"avg_site_all, ft_site_all",Date sample was collected
+Landcover,"avg_site_all, ft_site_all",Dominant vegetation type for sample location
+Latitude,"avg_site_all, ft_site_all",Latitude in decimal degrees
+Longitude,"avg_site_all, ft_site_all",Latitude in decimal degrees
+Temp_water_degC,"avg_site_all, ft_site_all",Water temperature (degrees Celsius) 
+pH,"avg_site_all, ft_site_all",Water pH
+DO_per,"avg_site_all, ft_site_all",Dissolved oxygen (%)
+Cond_uscm,"avg_site_all, ft_site_all",Conductivity (microsiemens per centimeter)
+TDS_mgL,"avg_site_all, ft_site_all",Total dissolved solids (milligrams per liter)
+mvorp,"avg_site_all, ft_site_all",Oxidation- reduction potential (mV)
+Velocity_m_s,"avg_site_all, ft_site_all",Measured stream velocity (meters per second)
+Discharge_m3s,"avg_site_all, ft_site_all",Calculated stream discharge (meters cubed per second)
+WindSpeed_mean_ms,"avg_site_all, ft_site_all",Daily average windspeed (meters per second)
+Temp_air_degC,"avg_site_all, ft_site_all",Daily average temperature (degrees Celsius)
+Slope,"avg_site_all, ft_site_all",Stream slope (unitless)
+DistancetoOutlet_m,"avg_site_all, ft_site_all",Distance to stream outlet (meters)
+CN,"avg_site_all, ft_site_all",Dissolved organic carbon to total dissolved nitrogen ratio
+conc_CH4_mM,"avg_site_all, ft_site_all",Dissolved methane concentration (millimolar) 
+conc_CO2_mM,"avg_site_all, ft_site_all",Dissolved carbon dioxide concentration (millimolar)
+DOC_mgL,"avg_site_all, ft_site_all",Dissolved carbon concentration (milligrams per liter)
+TDN_mgL,"avg_site_all, ft_site_all",Total dissolved nitrogen (milligrams per liter)
+del_DIC,"avg_site_all, ft_site_all",13C signature of dissolved inorganic carbon (permille)
+pCO2_uatm,"avg_site_all, ft_site_all",Partial pressure of carbon dioxide (micro atmospheres)
+CO2Flux_gm2d,"avg_site_all, ft_site_all",Carbon dioxide flux (grams per meters squared per day)
+k600,"avg_site_all, ft_site_all",Standardized gas transfer velocity 
+NOSC_median,"avg_site_all, ft_site_all",Median value of the nominal oxidation state of carbon for all formulas in a given sample
+NOSC_mean,"avg_site_all, ft_site_all",Mean value of the nominal oxidation state of carbon for all formulas in a given sample
+NOSC_std,"avg_site_all, ft_site_all",Standard deviaiton of the nominal oxidation state of carbon for all formulas in a given sample
+GFE_median,"avg_site_all, ft_site_all",Median value of the gibbs free energy for all formulas in a given sample
+GFE_mean,"avg_site_all, ft_site_all",Mean value of the gibbs free energy for all formulas in a given sample
+GFE_std,"avg_site_all, ft_site_all",Standard deviation of the gibbs free energy for all formulas in a given sample
+DBE_median,"avg_site_all, ft_site_all",Median value of the double-bond equivalents for all formulas in a given sample
+DBE_mean,"avg_site_all, ft_site_all",Mean value of the double-bond equivalents for all formulas in a given sample
+DBE_std,"avg_site_all, ft_site_all",Standard deviation of the double-bond equivalents for all formulas in a given sample
+AI_median,"avg_site_all, ft_site_all",Median value of the aromaticity index for all formulas in a given sample
+AI_mean,"avg_site_all, ft_site_all",Mean value of the aromaticity index for all formulas in a given sample
+AI_std,"avg_site_all, ft_site_all",Standard deviation of the aromaticity index for all formulas in a given sample
+Shannon_Diversity,"avg_site_all, ft_site_all",Calculated shannon's diversity index (H')
+Raos_Elemental_Comp,"avg_site_all, ft_site_all",Calculated Rao's Elemental Compostion diversity
+Amino_sugar,"avg_site_all, ft_site_all",Relative abundance of Amino sugars for all formulas in a given sample
+Carbohydrate,"avg_site_all, ft_site_all",Relative abundance of Carbohydrates for all formulas in a given sample
+Cond_HC,"avg_site_all, ft_site_all",Relative abundance of Condensed Hydrocarbons for all formulas in a given sample
+Lignin,"avg_site_all, ft_site_all",Relative abundance of Ligins for all formulas in a given sample
+Lipid,"avg_site_all, ft_site_all",Relative abundance of Lipids for all formulas in a given sample
+Protein,"avg_site_all, ft_site_all",Relative abundance of Proteins for all formulas in a given sample
+Tannin,"avg_site_all, ft_site_all",Relative abundance of Tannins for all formulas in a given sample
+Unsat_HC,"avg_site_all, ft_site_all",Relative abundance of Unsaturated Hydrocarbons for all formulas in a given sample
+Other,"avg_site_all, ft_site_all",Relative abundance of Other molecules for all formulas in a given sample
+Aquatic_Type_pair,"avg_site_all, ft_site_all",Freshwater environment next to (porewater) or where samples were collected
+Mass,ft_site_all,Mass of formula 
+C,ft_site_all,Number of carbon atoms
+H,ft_site_all,Number of hydrogen atoms
+O,ft_site_all,Number of oxygen atoms
+N,ft_site_all,Number of nitrogen atoms
+S,ft_site_all,Number of sulfur atoms
+P,ft_site_all,Number of phosphorus atoms
+NeutralMass,ft_site_all,Mass of uncharged molecules before ionized detected
+Error_ppm,ft_site_all,Error (parts per million)
+MolecularFormula,ft_site_all,Assigned molecular formula
+NormIntensity,ft_site_all,Peak intenstities normalized to total ion count 
+El_comp,ft_site_all,Elemental composition 
+Class,ft_site_all,"Compound class (e.g., Lipid, Protein, ect)"
+OC,ft_site_all,Ratio of oxygen atoms to carbon atoms
+HC,ft_site_all,Ratio of hydrogen atoms to carbon atoms
+NOSC,ft_site_all,Nominal oxidation state of carbon 
+GFE,ft_site_all,Gibbs free energy
+DBE,ft_site_all,Double bond equivalent 
+DBE_O,ft_site_all,Double bond equivalent minus oxygen atoms
+AI,ft_site_all,Aromaticty index
+AI_mod,ft_site_all,Modfied aromaticity index
+DBE_AI,ft_site_all,Double-bond equivalent and armoticity index
