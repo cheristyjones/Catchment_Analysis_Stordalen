@@ -1,0 +1,226 @@
+---
+title: "RandomForestModels"
+author: "CPJ"
+date: "2026-04-08"
+output: 
+  html_document:
+    number_sections: true
+---
+This script will run the random forest models for the manuscript "Peatlands Control Aquatic Carbon Pools and Fluxes in an Arctic Subcatchment".
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+Load packagesand data frames
+
+```{r Setup, include= FALSE}
+####Load in Libraries####
+library(dplyr)
+library(lubridate)
+library(colorblindcheck)
+library(ggpubr)
+library(rstatix)
+library(readr)
+library(patchwork)
+library(tools)
+library(tidyr)
+library(randomForest)
+library(caret)
+library(ComplexUpset)
+library(ggrepel)
+library(pairwiseAdonis)
+
+####Import Data Frames####
+avg_site_all <- read_csv("avg_site_all.csv")
+ft_site_all <- read_csv("ft_site_all.csv")
+```
+
+# pCO2 Random Forest
+Run random forest for dissolved CO2
+
+```{r pCO2 Random Forest}
+avg_site_pco2 <- avg_site_all %>%
+  filter(!is.na(pCO2_uatm))
+avg_site_pco2 <- avg_site_pco2 %>%
+  filter(!is.na(Tannin)) #filter for the sites with both FT and pCO2 data
+
+set.seed(226)
+imputed_data_pco2 <- rfImpute(
+  pCO2_uatm ~  k600 + NOSC_mean  + DOC_mgL + TDN_mgL  + CN  +
+    Shannon_Diversity + Raos_Elemental_Comp   +
+    Tannin + Lignin + Lipid + Cond_HC + Protein + Unsat_HC + Landcover + Slope + DistancetoOutlet_m  +
+    Amino_sugar + Carbohydrate + Aquatic_Type,
+  data = avg_site_pco2, 
+  iter = 5
+)
+#saveRDS(imputed_data_pco2, "imputed_data_pco2.rds")
+# calculate number of imputed variables
+n_before_pco2 <- sum(is.na(avg_site_pco2))
+n_after_pco2  <- sum(is.na(imputed_data_pco2))
+per_imp_pco2  <- (n_before_pco2 / (nrow(avg_site_pco2) * ncol(avg_site_pco2))) * 100
+per_imp_pco2
+
+imputed_data_pco2$Landcover <- as.factor(imputed_data_pco2$Landcover)
+imputed_data_pco2$Aquatic_Type <- as.factor(imputed_data_pco2$Aquatic_Type)
+
+train_index_pco2 <- createDataPartition(imputed_data_pco2$pCO2_uatm, p = 0.8, list = FALSE)
+
+train_data_pco2 <- imputed_data_pco2[train_index_pco2, ]
+test_data_pco2  <- imputed_data_pco2[-train_index_pco2, ]
+
+### Tune parameters
+mtry_vals <- c(2, 4, 6, 8)
+ntree_vals <- c(500, 1000, 1500, 2000)
+nodesize_vals <- c(1, 3, 5, 10)
+
+# Store results
+results_pco2 <- data.frame()
+
+# Loop
+for (mtry in mtry_vals) {
+  for (ntree in ntree_vals) {
+    for (nodesize in nodesize_vals) {
+      
+      model_pco2 <- randomForest(
+        pCO2_uatm ~ .,
+        data = train_data_pco2,
+        mtry = mtry,
+        ntree = ntree,
+        nodesize = nodesize,
+        importance = TRUE
+      )
+      
+      preds_pco2 <- predict(model_pco2, newdata = test_data_pco2)
+      
+      r2_pco2 <- R2(preds_pco2, test_data_pco2$pCO2_uatm)
+      rmse_pco2 <- RMSE(preds_pco2, test_data_pco2$pCO2_uatm)
+      
+      results_pco2 <- rbind(
+        results_pco2,
+        data.frame(mtry, ntree, nodesize, r2 = r2_pco2, rmse = rmse_pco2)
+      )
+    }
+  }
+}
+
+# Sort results
+results_pco2 <- results_pco2[order(-results_pco2$r2), ]
+print(results_pco2[1:10, ])
+
+# Best params
+best_params_pco2 <- results_pco2[which.max(results_pco2$r2), ]
+best_params_pco2
+
+# Final model
+final_rf_pco2 <- randomForest(
+  pCO2_uatm ~ .,
+  data = imputed_data_pco2,
+  mtry = best_params_pco2$mtry,
+  ntree = best_params_pco2$ntree,
+  nodesize = best_params_pco2$nodesize,
+  importance = TRUE
+)
+
+# Importance
+importance(final_rf_pco2)
+varImpPlot(final_rf_pco2)
+print(final_rf_pco2)
+
+# Save the final Random Forest model
+saveRDS(final_rf_pco2, file = "final_rf_pco2.rds")
+```
+
+# CO2 Flux Random Forest Model
+
+```{r CO2 Random Forest Model}
+set.seed(34)
+###Random forest for flux###
+avg_site_co2 <- avg_site_all %>%
+  filter(!is.na(CO2Flux_gm2d))
+
+imputed_data <- rfImpute(
+  CO2Flux_gm2d ~ pCO2_uatm + k600 + NOSC_mean  + DOC_mgL + TDN_mgL  + CN  +
+    Shannon_Diversity + Raos_Elemental_Comp   +
+    Tannin + Lignin + Lipid + Cond_HC + Protein + Unsat_HC + Landcover + Slope + DistancetoOutlet_m  +
+    Amino_sugar + Carbohydrate + Aquatic_Type,
+  data = avg_site_co2, 
+  iter = 5
+)
+saveRDS(imputed_data, "imputed_data.rds")
+##ok now let's train the data
+ # Split into train/test sets
+#-------------------------------
+  
+
+train_index <- createDataPartition(imputed_data$CO2Flux_gm2d, p = 0.8, list = FALSE)
+train_data <- imputed_data[train_index, ]
+test_data  <- imputed_data[-train_index, ]
+
+
+###Tune more factors
+mtry_vals <- c(2, 4, 6, 8) #number of variables per tree
+ntree_vals <- c(500, 1000, 1500, 2000) #number of trees
+nodesize_vals <- c(1, 3, 5, 10)
+
+# Data frame to store results
+results <- data.frame()
+
+# Loop through parameter combinations
+for (mtry in mtry_vals) {
+  for (ntree in ntree_vals) {
+    for (nodesize in nodesize_vals) {
+      
+      # Train model
+      model <- randomForest(
+        CO2Flux_gm2d ~ .,
+        data = train_data,
+        mtry = mtry,
+        ntree = ntree,
+        nodesize = nodesize,
+        importance = TRUE
+      )
+      
+      # Predict on test data
+      preds <- predict(model, newdata = test_data)
+      
+      # Evaluate performance
+      r2 <- R2(preds, test_data$CO2Flux_gm2d)
+      rmse <- RMSE(preds, test_data$CO2Flux_gm2d)
+      
+      # Store results
+      results <- rbind(results, data.frame(mtry, ntree, nodesize, r2, rmse))
+    }
+  }
+}
+
+# View sorted results
+results <- results[order(-results$r2), ]
+print(results[1:10, ])
+
+#select the best comination
+best_params <- results[which.max(results$r2), ]
+best_params
+
+#refit the model to all of the data
+final_rf <- randomForest(
+  CO2Flux_gm2d ~ .,
+  data = imputed_data,
+  mtry = best_params$mtry,
+  ntree = best_params$ntree,
+  nodesize = best_params$nodesize,
+  importance = TRUE
+)
+print(final_rf)
+importance(final_rf)
+varImpPlot(final_rf)
+
+# View variable importance
+importance(final_rf)
+varImpPlot(final_rf)
+print(final_rf)
+
+saveRDS(final_rf, file = "final_rf.rds")
+```
+

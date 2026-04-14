@@ -1,0 +1,334 @@
+---
+title: "Permanovas"
+author: "CPJ"
+date: "2026-04-09"
+output: html_document
+---
+
+This script will produce the Permanova results for the manuscript "Peatlands Control Aquatic Carbon Pools and Fluxes in an Arctic Subcatchment".
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+```{r Setup}
+library(dplyr)
+library(lubridate)
+library(colorblindcheck)
+library(ggpubr)
+library(rstatix)
+library(readr)
+library(patchwork)
+library(tools)
+library(tidyr)
+library(caret)
+library(ComplexUpset)
+library(ggrepel)
+library(pairwiseAdonis)
+library(flextable)
+
+####Import Data Frames####
+avg_site_all <- read_csv("avg_site_all.csv")
+ft_site_all <- read_csv("ft_site_all.csv")
+avg_site_surf <- read_csv("avg_site_surf.csv")
+```
+
+# NMDS
+
+```{r NMDS}
+##create matrix 
+# --- Prepare site matrix ---
+site <- ft_site_all %>%
+  dplyr::select(Plot, Sample_Type, Aquatic_Type, Landcover, MolecularFormula, NormIntensity)
+
+site_unique <- site %>%
+  group_by(Plot, Sample_Type, Aquatic_Type, Landcover, MolecularFormula) %>%
+  summarise(NormIntensity = sum(NormIntensity), .groups = "drop")
+
+site_matrix <- site_unique %>%
+  pivot_wider(
+    names_from = MolecularFormula,
+    values_from = NormIntensity,
+    values_fill = list(NormIntensity = 0)
+  )
+
+# --- Make matrix for NMDS ---
+site_matrix_mat <- site_matrix %>%
+  dplyr::select(-Plot, -Sample_Type, -Aquatic_Type, -Landcover) %>%
+  as.matrix()
+
+rownames(site_matrix_mat) <- paste(
+  site_matrix$Plot,
+  site_matrix$Sample_Type,
+  site_matrix$Aquatic_Type,
+  site_matrix$Landcover,
+  sep = "_"
+)
+
+# --- Run NMDS ---
+set.seed(42)
+nmds <- metaMDS(site_matrix_mat, distance = "bray", k = 2, trymax = 100)
+stress_val <- round(nmds$stress, 3)
+
+# --- Prepare metadata ---
+meta_clean <- ft_site_all %>%
+  select(Plot, Sample_Type, Aquatic_Type, Landcover) %>%
+  distinct() %>%
+  mutate(SiteID = paste(Plot, Sample_Type, Aquatic_Type, Landcover, sep = "_"))
+
+# --- NMDS scores with metadata ---
+scores_df <- data.frame(nmds$points) %>%
+  mutate(SiteID = rownames(.)) %>%
+  left_join(meta_clean, by = "SiteID") %>%
+  rename(NMDS1 = MDS1, NMDS2 = MDS2)
+
+# --- Environmental matrix ---
+# select your chemical/biochemical variables from avg_site_all
+env_matrix <- avg_site_all %>%
+  dplyr::select(Plot, Sample_Type, Aquatic_Type, Landcover,
+                Lignin, Tannin, Unsat_HC, `Cond_HC`, `Amino_sugar`,
+                Carbohydrate, Protein, Lipid, NOSC_mean, Shannon_Diversity, Raos_Elemental_Comp) %>%
+  mutate(SiteID = paste(Plot, Sample_Type, Aquatic_Type, Landcover, sep = "_")) %>%
+  filter(SiteID %in% rownames(site_matrix_mat)) %>%
+  arrange(factor(SiteID, levels = rownames(site_matrix_mat))) %>%
+  dplyr::select(-Plot, -Sample_Type, -Aquatic_Type, -Landcover, -SiteID) %>%
+  na.omit()
+
+# --- Fit envfit ---
+fit <- envfit(nmds, env_matrix, permutations = 999)
+
+env_vectors <- as.data.frame(scores(fit, display = "vectors"))
+env_vectors$pval <- fit$vectors$pvals
+env_vectors$Variable <- rownames(env_vectors)
+env_vectors$R2 <- fit$vectors$r
+
+# Filter only significant vectors
+env_vectors_sig <- env_vectors %>%
+  filter(pval <= 0.05) %>%
+  rename(MDS1 = NMDS1, MDS2 = NMDS2)
+
+# --- Scale arrows to NMDS space ---
+max_site_score <- max(sqrt(scores_df$NMDS1^2 + scores_df$NMDS2^2))
+max_arrow <- max(sqrt(env_vectors_sig$MDS1^2 + env_vectors_sig$MDS2^2))
+scale_factor <- 0.8 * max_site_score / max_arrow
+
+env_vectors_sig_scaled <- env_vectors_sig %>%
+  mutate(MDS1 = MDS1 * scale_factor,
+         MDS2 = MDS2 * scale_factor)
+
+saveRDS(nmds, "nmds_model.rds")
+saveRDS(scores_df, "nmds_scores_df.rds")
+saveRDS(env_vectors_sig_scaled, "nmds_env_vectors_scaled.rds")
+saveRDS(stress_val, "nmds_stress.rds")
+```
+
+# Permanovas
+
+```{r Data}
+set.seed(456)
+
+meta_clean_ordered <- meta_clean %>%
+  filter(SiteID %in% rownames(site_matrix_mat)) %>%
+  arrange(match(SiteID, rownames(site_matrix_mat)))
+
+meta_pw <- meta_clean_ordered %>%
+  #filter(!(Aquatic_Type == "Lake" & Landcover == "Tundra")) %>%
+  mutate(
+    Landcover_surface = ifelse(
+      Aquatic_Type == "Porewater",
+      paste("Porewater", Landcover, sep = "_"),
+      paste(Aquatic_Type, Landcover, sep = "_")
+    )
+  )
+
+site_matrix_pw <- site_matrix_mat[rownames(site_matrix_mat) %in% meta_pw$SiteID, ]
+dist_mat_pw_full <- as.matrix(vegdist(site_matrix_pw, method = "bray"))
+
+```
+
+## All Surface vs All Porewater
+
+```{r All surface vs Poreater}
+meta_all <- meta_clean_ordered %>%
+  #filter(!(Aquatic_Type == "Lake" & Landcover == "Tundra")) %>%
+  filter(Sample_Type %in% c("surface", "porewater")) %>%
+  filter(SiteID %in% rownames(site_matrix_mat)) %>%
+  arrange(match(SiteID, rownames(site_matrix_mat)))
+
+site_matrix_all <- site_matrix_mat[meta_all$SiteID, ]
+
+dist_all <- vegdist(site_matrix_all, method = "bray")
+
+adon_all <- adonis2(
+  dist_all ~ Sample_Type,
+  data = meta_all,
+  permutations = 999
+)
+
+r2_all_df <- data.frame(
+  Group = "Surface vs Porewater",
+  F_stat = adon_all$F[1],
+  R2 = adon_all$R2[1],
+  p_value = adon_all$`Pr(>F)`[1]
+)
+
+
+
+r2_all_df
+
+```
+
+
+## Landcover Surface vs Landcover Porewater
+```{r}
+meta_clean_ordered <- meta_clean %>%
+  filter(SiteID %in% rownames(site_matrix_mat)) %>%
+  arrange(match(SiteID, rownames(site_matrix_mat)))
+
+# =========================
+# PERMANOVA: Surface vs Porewater
+# within Aquatic_Type × Landcover
+# =========================
+meta_pw_clean <- meta_clean_ordered %>%
+  mutate(
+    Sample_Type = tolower(Sample_Type)
+  ) %>%
+  group_by(Plot) %>%
+  mutate(
+    Aquatic_Type_pair = first(Aquatic_Type[Sample_Type != "porewater"])
+  ) %>%
+  ungroup() %>%
+  mutate(
+    System = paste(Aquatic_Type_pair, Landcover, sep = "_")
+  ) %>%
+  filter(Sample_Type %in% c("surface", "porewater")) %>%
+  filter(SiteID %in% rownames(site_matrix_mat))
+
+# =========================
+# 2. Keep only valid paired systems
+# =========================
+
+valid_systems <- meta_pw_clean %>%
+  count(System, Sample_Type) %>%
+  pivot_wider(
+    names_from = Sample_Type,
+    values_from = n,
+    values_fill = 0
+  ) %>%
+  filter(surface > 0 & porewater > 0) %>%
+  pull(System)
+
+meta_pw_clean <- meta_pw_clean %>%
+  filter(System %in% valid_systems)
+
+# =========================
+# 3. Align community matrix
+# =========================
+
+site_sub <- site_matrix_mat[meta_pw_clean$SiteID, ]
+dist_pw <- vegdist(site_sub, method = "bray")
+dist_mat <- as.matrix(dist_pw)
+
+# =========================
+# 4. PERMANOVA per system
+# =========================
+
+systems <- unique(meta_pw_clean$System)
+
+results <- lapply(systems, function(sys){
+
+  sel <- meta_pw_clean$System == sys
+
+  ad <- adonis2(
+    dist_mat[sel, sel] ~ meta_pw_clean$Sample_Type[sel],
+    permutations = 999
+  )
+
+  data.frame(
+    System = sys,
+    Aquatic_Type = unique(meta_pw_clean$Aquatic_Type_pair[sel]),
+    Landcover = unique(meta_pw_clean$Landcover[sel]),
+    F = ad$F[1],
+    R2 = ad$R2[1],
+    p = ad$`Pr(>F)`[1]
+  )
+})
+
+r2_pw_df <- bind_rows(results)
+
+# =========================
+# 5. Adjust p-values
+# =========================
+
+r2_pw_df$p_adj <- p.adjust(r2_pw_df$p, method = "BH")
+
+r2_pw_df
+
+```
+
+
+## Landcover vs Aquatic Type
+```{r}
+# Filter out Porewater and Lake-Tundra
+meta_surface <- meta_clean_ordered %>%
+  filter(Aquatic_Type != "Porewater") %>%
+  filter(!(Aquatic_Type == "Lake" & Landcover == "Tundra"))
+
+# Subset site matrix to match metadata
+site_matrix_surface <- site_matrix_mat[rownames(site_matrix_mat) %in% meta_surface$SiteID, ]
+
+# Bray-Curtis distance
+dist_surface <- vegdist(site_matrix_surface, method = "bray")
+
+# Run PERMANOVA
+adon_land <- adonis2(dist_surface ~ Landcover * Aquatic_Type,
+                             data = meta_surface,
+                             permutations = 999,
+                     by = "terms")
+
+adon_land
+r2_df <- data.frame(
+  Model = c("Landcover", "Aquatic Type"),
+  F_stat = c(
+    adon_land["Landcover", "F"],
+    adon_land["Aquatic_Type", "F"]
+  ),
+  R2 = c(
+    adon_land["Landcover", "R2"],
+    adon_land["Aquatic_Type", "R2"]
+  ),
+  p_value = c(
+    adon_land["Landcover", "Pr(>F)"],
+    adon_land["Aquatic_Type", "Pr(>F)"]
+  )
+)
+r2_df
+```
+
+
+## add sigs and save dataframes for plotting
+```{r save}
+####add significant for plotting ####
+get_stars <- function(p) {
+  ifelse(p <= 0.001, "***",
+  ifelse(p <= 0.01, "**",
+  ifelse(p <= 0.05, "*", " ")))
+}
+
+r2_pw_df <- r2_pw_df %>%
+  mutate(
+    System = gsub("_", " ", System),
+    Signif = get_stars(p)
+  )
+r2_pw_df
+write.csv(r2_pw_df, "porewater_perm.csv", row.names = FALSE)
+
+r2_df <- r2_df %>%
+  mutate(
+    Model = gsub("_", " ", Model),
+    Signif = get_stars(p_value)
+  )
+r2_df
+write.csv(r2_df, "all_perm.csv", row.names = FALSE)
+```
+

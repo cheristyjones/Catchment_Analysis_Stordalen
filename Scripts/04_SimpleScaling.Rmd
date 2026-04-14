@@ -1,0 +1,75 @@
+---
+title: "SimpleScaling"
+author: "CPJ"
+date: "2026-04-14"
+output: html_document
+---
+This script will perform the simple scaling exercise for the manuscript "Peatlands Control Aquatic Carbon Pools and Fluxes in an Arctic Subcatchment".
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+####Load in Libraries####
+library(dplyr)
+library(lubridate)
+library(colorblindcheck)
+library(ggpubr)
+library(rstatix)
+library(readr)
+library(patchwork)
+library(tools)
+library(tidyr)
+library(randomForest)
+library(caret)
+library(ComplexUpset)
+library(ggrepel)
+library(pairwiseAdonis)
+library(flextable)
+library(officer)
+
+####Import Data Frames####
+avg_site_all <- read_csv("avg_site_all.csv")
+ft_site_all <- read_csv("ft_site_all.csv")
+avg_site_surf <- read_csv("avg_site_surf.csv")
+```
+
+```{r Calcualtions}
+###Summarize to do the simple scaling technique
+catchment_sum <- avg_site_surf %>%
+  filter(Aquatic_Type != "Lake") %>%  # remove lakes
+  group_by(Landcover) %>%
+  summarise(
+    avg_co2flux_kgd = (mean(CO2Flux_gm2d, na.rm = TRUE)* 28717.7)/(1000) #stream area of the catchment in m2 and then into grams
+  ) %>%
+  mutate(
+    avg_co2flux_annualkg = avg_co2flux_kgd  * 135 #ice-free season
+    
+  )
+
+##Now if you do it for each reach type
+avg_flux_df <- avg_site_surf %>%
+  filter(Aquatic_Type != "Lake") %>%  # remove lakes
+  group_by(Landcover) %>%
+  summarise(
+    avg_fluxkg = (mean(CO2Flux_gm2d, na.rm = TRUE)/(1000)) ,
+    .groups = "drop"
+  )
+area_df <- data.frame(
+  Landcover = c("Tundra", "Forest", "Peatland"),
+  area = c(2516.97, 17188.37, 4771.54)
+) #from qgis
+avg_flux_df <- avg_flux_df %>%
+  left_join(area_df, by = "Landcover")
+avg_flux_df <-avg_flux_df %>%
+  mutate(avg_flux_kgy = avg_fluxkg *area *135)
+
+total_avg_flux <- avg_flux_df %>%
+  mutate(weighted_flux = avg_fluxkg * area) %>%
+  summarise(total_avg_flux = (sum(weighted_flux, na.rm = TRUE)*135))
+
+##calculate percet difference
+catchment_sum<- catchment_sum %>%
+  mutate(
+    pct_diff_flux = (avg_co2flux_annualkg - 169507.9)/169507.9 * 100
+  )
+View(catchment_sum)
+```

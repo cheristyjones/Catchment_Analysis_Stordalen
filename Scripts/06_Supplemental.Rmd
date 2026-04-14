@@ -1,0 +1,270 @@
+---
+title: "Supplementary"
+author: "CPJ"
+date: "2026-04-10"
+output: html_document
+---
+This script will produce supplementary material for the manuscript "Peatlands Control Aquatic Carbon Pools and Fluxes in an Arctic Subcatchment".
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+```{r Setup, include=FALSE}
+####Load in Libraries####
+library(dplyr)
+library(lubridate)
+library(colorblindcheck)
+library(ggpubr)
+library(rstatix)
+library(readr)
+library(patchwork)
+library(tools)
+library(tidyr)
+library(randomForest)
+library(caret)
+library(ComplexUpset)
+library(ggrepel)
+library(pairwiseAdonis)
+library(flextable)
+library(officer)
+
+####Import Data Frames####
+avg_site_all <- read_csv("avg_site_all.csv")
+ft_site_all <- read_csv("ft_site_all.csv")
+
+####NMDS Dataframes####
+scores_df <- readRDS("nmds_scores_df.rds")
+env_vectors_sig_scaled <- readRDS("nmds_env_vectors_scaled.rds")
+stress_val <- readRDS("nmds_stress.rds")
+r2_pw_df<- read_csv("porewater_perm.csv")
+r2_df<- read_csv("all_perm.csv")
+
+###Random Forest Models###
+final_rf_pco2 <- readRDS("final_rf_pco2.rds")
+final_rf <- readRDS("final_rf.rds")
+imputed_data_pco2<-readRDS("imputed_data_pco2.rds")
+imputed_data<-readRDS("imputed_data.rds") #co2flux
+
+###Porewater data###
+avg_site_all <- avg_site_all %>%
+  group_by(Plot) %>%
+  mutate(
+    Aquatic_Type_pair = first(Aquatic_Type[Sample_Type != "porewater"])
+  ) %>%
+  ungroup()
+
+avg_site_pw <- avg_site_all %>%
+  filter(Sample_Type == "porewater")
+avg_site_pw$Aquatic_Type_pair <- factor(avg_site_pw$Aquatic_Type_pair,
+                                levels = c("Stream", "Lake"))
+avg_site_pw$Landcover <- factor(avg_site_pw$Landcover,
+    levels = c('Tundra','Forest', 'Peatland'),ordered = TRUE)
+```
+
+## Plot Styles
+
+Setting up base plotting functions and color palette
+
+```{r Plotting Setup, include=FALSE}
+####Set Palettes###
+reach_colors<- c (
+  "Tundra" = "#9C8C8B", 
+  "Forest" = "#8F9C59",
+  "Peatland" = "#A25933"
+)
+
+reach_shapes<- c (
+  "Lake" = 25, 
+  "Stream" = 21,
+  "Porewater" = 13
+)
+
+palette_check(reach_colors, plot=T) #check color blind friendly
+
+####reorder so they plot in the correct order##
+avg_site_all$Landcover <- factor(avg_site_all$Landcover,
+    levels = c('Tundra','Forest', 'Peatland'),ordered = TRUE)
+avg_site_all$Landcover<-as.factor(avg_site_all$Landcover)
+ft_site_all$Landcover <- factor(ft_site_all$Landcover,
+    levels = c('Tundra','Forest', 'Peatland'),ordered = TRUE)
+ft_site_all$Landcover<-as.factor(ft_site_all$Landcover)
+avg_site_all$Aquatic_Type <- factor(avg_site_all$Aquatic_Type,
+                                levels = c("Stream", "Lake", "Porewater"))
+ft_site_all$Aquatic_Type <- factor(ft_site_all$Aquatic_Type,
+                                levels = c("Stream", "Lake", "Porewater"))
+###make theme####
+my_theme<-function() {
+  theme_bw() +
+  theme(text=element_text(size=16),
+        rect=element_rect(fill="transparent"),
+        strip.background = element_rect(color="black", fill = "#F2F2F2" , size=1.5 ),
+        panel.grid = element_blank(),
+        #axis.title.x=element_text(size=30),
+        axis.title.x=element_blank(),
+        axis.title.y = element_text(size=16), 
+        legend.position = "None",
+        legend.key = element_rect(colour = NA, fill = NA),
+        strip.text=element_text(size=16),
+        axis.text.y =element_text(color="black"),
+        axis.text.x =element_text(color="black", angle=45, hjust=1, size=16),
+        panel.background =element_rect(color="black", fill='transparent', size=1.5),
+        plot.background = element_rect(fill = "white", colour = NA),
+        plot.margin = ggplot2::margin(10,18,10,18))
+
+}
+
+my_theme2 <- function() {
+  theme_bw() +
+    theme(
+      text = element_text(size = 13),
+      plot.background = element_rect(fill = "white", color = NA),
+      strip.background = element_rect(color = "black", fill = "#F2F2F2", size = 1.5),
+      axis.title.x = element_blank(),
+      axis.title.y = element_text(size = 13),
+      legend.position = "right",
+      strip.text = element_text(size = 11),
+      legend.key = element_rect(colour = NA, fill = NA),
+      axis.text.y = element_text(color = "black", size = 13),
+      axis.text.x = element_text(color = "black", size = 13),
+      panel.background = element_rect(fill = "transparent"),
+      panel.grid.major = element_line(color = "grey90"),   # lighter major grids
+      panel.grid.minor = element_line(color = "grey95"),   # even lighter minor grids
+      panel.border = element_rect(color = "black", fill = NA, size = 1.5), # border on top
+      plot.margin = ggplot2::margin(2,3,2,2)
+    )
+}
+
+#### Base plotting function for boxplots###
+plot_flux <- function(df, yvar, ylab_text) {
+  # Remove rows where yvar or Aquatic_Type or Landcover are NA
+  df_clean <- df %>%
+    dplyr::filter(!is.na(.data[[yvar]]), 
+                  !is.na(Aquatic_Type), 
+                  !is.na(Landcover))
+  
+  ggplot(df_clean, aes(x = Aquatic_Type, y = .data[[yvar]], fill = Landcover)) +
+    geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+    geom_jitter(
+      aes(shape = Aquatic_Type),
+      position = position_jitterdodge(jitter.width = 0.35, dodge.width = 0.8),
+      size = 2.5,
+      alpha = 1,
+      stroke = 0.7,
+      show.legend = FALSE
+    ) +
+    scale_fill_manual(values = reach_colors, name = "Landcover Type") +
+    scale_shape_manual(values = reach_shapes) +
+    scale_color_manual(values = reach_colors) +
+    ylab(ylab_text) +
+    my_theme2() +
+    NULL
+}
+
+plot_flux_pw <- function(df, yvar, ylab_text) {
+
+  ggplot(df, aes(x = Aquatic_Type, y = .data[[yvar]], fill = Landcover)) +
+    
+    geom_boxplot(
+      aes(group = Landcover),
+      alpha = 0.5,
+      outlier.shape = NA,
+      na.rm = TRUE
+    ) +
+    
+    geom_jitter(
+      aes(
+        shape = Aquatic_Type_pair,
+        group = Landcover
+      ),
+      position = position_jitterdodge(
+        jitter.width = 0.35,
+        dodge.width = 0.8
+      ),
+      size = 2.5,
+      alpha = 1,
+      stroke = 0.7,
+      na.rm = TRUE
+    ) +
+    
+    scale_fill_manual(
+      values = reach_colors,
+      name = "Landcover Type",
+      guide = guide_legend(
+        override.aes = list(shape = NA)  # <- removes shapes from fill legend
+      )
+    ) +
+    
+    scale_shape_manual(
+      values = reach_shapes,
+      name = "Aquatic Type"
+    ) +
+    
+    labs(shape = "Aquatic Type") +
+    
+    ylab(ylab_text) +
+    
+    my_theme2()
+}
+```
+
+# Figure S1
+## Plot
+```{r Porewater}
+s1 <- plot_flux_pw(
+  avg_site_pw,
+  "conc_CO2_mM",
+  expression(CO[2]~"Concentration (mM)")
+) 
+s1
+ggsave("figs1.png", width=5, height=3.5, units = "in", dpi=600, bg = "white")
+```
+
+## Stats
+```{r}
+shapiro.test(avg_site_pw$conc_CO2_mM)
+kruskal.test(conc_CO2_mM ~ Landcover, data = avg_site_pw)
+```
+
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+pch4f <- plot_flux(
+  avg_site_surf,
+  "conc_CH4_mM",
+  expression(CH[4]~ "Concentration (mM)")
+) 
+ 
+pch4f
+ggsave("figs2.png", width=7, height=4, units = "in", dpi=600, bg = "white")
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+shandiv <- plot_flux(
+  avg_site_surf,
+  "Shannon_Diversity",
+  expression("Shannon's Diversity (H')")
+) 
+shandiv
+
+rdiv<-plot_flux(avg_site_surf,
+                 "Raos_Elemental_Comp",
+                 expression("Rao's Elemental Diversity"))
+rdiv
+
+div<-ggarrange(shandiv, rdiv, nrow=2, common.legend = T, legend = "right")
+div
+ggsave(
+  "Suppdiversity.png",
+  div,
+  width = 7,
+  height = 8,   # try 9–10
+  dpi = 600,
+  bg = "white"
+)
+```
+
