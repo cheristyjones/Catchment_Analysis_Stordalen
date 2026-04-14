@@ -6,6 +6,7 @@ Zenodo doi coming soon.
  ## Repositiory Structure
  ### /Data
  - Datasets used for analysis
+ - ReadMe file contains a description of column variables in the datasets
  - Large files stored using GIT LFS
 
 ### /Scripts
